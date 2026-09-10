@@ -1729,9 +1729,12 @@ This task builds inference and checkpointing. Training comes next, separately, b
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
+#include <random>
 #include <string>
 #include "mz/board.hpp"
 #include "mz/network.hpp"
+#include "mz/targets.hpp"
 
 using namespace mz;
 
@@ -2236,13 +2239,18 @@ The backward pass runs in one reverse loop so that each `dS[k]` is complete — 
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_network.cpp` (and add the new calls to `main`):
+Insert into `tests/test_network.cpp` **immediately before `main()`**, not at
+the end of the file. `main()` is the last thing Task 5 wrote, and a test
+function defined after `main` is not declared before the call to it inside
+`main`. Move the two new includes to the top of the file with the others.
+
+Then add the new calls to `main`:
 
 ```cpp
 // ---- Task 6: backprop-through-time ----
-
-#include <random>
-#include "mz/targets.hpp"
+// (These two includes belong at the TOP of the file, with the Task 5 ones.)
+//   #include <random>
+//   #include "mz/targets.hpp"
 
 namespace {
 
