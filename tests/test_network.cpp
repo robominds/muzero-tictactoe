@@ -22,19 +22,64 @@ bool near(float a, float b, float tol = 1e-5f) { return std::fabs(a - b) < tol; 
 } // namespace
 
 void test_initial_inference_shapes_and_ranges() {
+    // A board with stones on it, deliberately. An empty board encodes to
+    // all zeros, and since Dense seeds only its weights and leaves biases
+    // at zero, an all-zero observation drives a bias-only pass through
+    // every layer -- the latent comes out all zeros, minMaxNormalize takes
+    // only its denominator-floor branch, and softmax9 returns exactly
+    // uniform. Every assertion below would pass on that path without
+    // testing anything. See test_untrained_network_is_flat_on_an_empty_board.
+    MuZeroNetwork network(1234);
+    Board board;
+    board = board.applyMove(4);
+    board = board.applyMove(0);
+    board = board.applyMove(8);
+    auto out = network.initialInference(board.encode());
+
+    assert(out.latent.size() == MuZeroNetwork::kLatentSize);
+    // Min-max normalization must put the extremes exactly at the ends of
+    // [0, 1], not merely somewhere inside it -- that is what distinguishes
+    // a working normalization from one that never ran.
+    float lo = out.latent[0], hi = out.latent[0];
+    for (float v : out.latent) {
+        assert(v >= -1e-6f && v <= 1.0f + 1e-6f);
+        lo = std::fmin(lo, v);
+        hi = std::fmax(hi, v);
+    }
+    assert(near(lo, 0.0f, 1e-5f));
+    assert(near(hi, 1.0f, 1e-5f));
+
+    // A real softmax over non-equal logits: sums to one AND is not flat.
+    float sum = 0.0f;
+    bool varies = false;
+    for (float p : out.policy) {
+        assert(p > 0.0f);
+        sum += p;
+        if (std::fabs(p - out.policy[0]) > 1e-6f) varies = true;
+    }
+    assert(near(sum, 1.0f));
+    assert(varies);
+
+    // A real tanh, not a passthrough of an untouched zero bias.
+    assert(out.value >= -1.0f && out.value <= 1.0f);
+    assert(std::fabs(out.value) > 1e-6f);
+}
+
+void test_untrained_network_is_flat_on_an_empty_board() {
+    // The empty board is the root position of every self-play game, so
+    // what an untrained network does there is worth pinning down rather
+    // than leaving as an accident. The observation is all zeros and Dense
+    // starts every bias at zero, so the whole forward pass is bias-only:
+    // a zero latent, a uniform policy, and a value of exactly zero. This
+    // is initialization-time behavior only -- training moves the biases,
+    // after which the empty board gives a real prediction like any other.
     MuZeroNetwork network(1234);
     Board board;
     auto out = network.initialInference(board.encode());
 
-    assert(out.latent.size() == MuZeroNetwork::kLatentSize);
-    // Latents are min-max normalized into [0, 1] so repeated dynamics
-    // applications cannot let magnitudes drift.
-    for (float v : out.latent) assert(v >= -1e-6f && v <= 1.0f + 1e-6f);
-
-    float sum = 0.0f;
-    for (float p : out.policy) { assert(p > 0.0f); sum += p; }
-    assert(near(sum, 1.0f));
-    assert(out.value >= -1.0f && out.value <= 1.0f);
+    for (float v : out.latent) assert(near(v, 0.0f));
+    for (float p : out.policy) assert(near(p, 1.0f / 9.0f));
+    assert(near(out.value, 0.0f));
 }
 
 void test_policy_head_is_not_masked_to_legal_moves() {
@@ -178,6 +223,7 @@ void test_load_reports_a_missing_file() {
 
 int main() {
     test_initial_inference_shapes_and_ranges();
+    test_untrained_network_is_flat_on_an_empty_board();
     test_policy_head_is_not_masked_to_legal_moves();
     test_recurrent_inference_shapes_and_ranges();
     test_recurrent_inference_depends_on_the_action();
