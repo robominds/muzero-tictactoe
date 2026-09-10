@@ -21,8 +21,12 @@
 - Search constants, fixed project-wide: `kPbCInit = 1.25f`, `kPbCBase = 19652.0f`, `kDiscount = 1.0f`.
 - Unroll length K defaults to 5. It is always called `unrollSteps` in code; `N` is reserved for the train loop's checkpoint/eval interval. Never reuse `K` for that interval.
 - Perspective convention, relied on by every component: a **value** is always from the perspective of the player to move in the state it describes; a **reward** is always from the perspective of the player who took the action producing it.
-- Commit after every task. Commit messages end with:
-  `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`
+- Commit after every task. End each commit message with the
+  `Co-Authored-By:` attribution trailer YOUR OWN session prescribes — the
+  harness issues a model-specific line, and it is more accurate for a
+  commit to credit the model that actually wrote it. The example trailers
+  shown in this plan's commit commands came from the planning session and
+  are illustrative, not literal: substitute your own.
 
 ---
 
