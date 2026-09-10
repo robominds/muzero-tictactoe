@@ -5,6 +5,7 @@
 #include <fstream>
 #include <random>
 #include <stdexcept>
+#include <vector>
 
 namespace mz {
 
@@ -135,11 +136,152 @@ void MuZeroNetwork::load(const std::string& path) {
     if (!in) throw std::runtime_error("MuZeroNetwork::load: truncated file " + path);
 }
 
-} // namespace mz
+MuZeroNetwork::Losses MuZeroNetwork::trainStep(const std::vector<UnrolledSample>& batch,
+                                               float learningRate) {
+    assert(!batch.empty());
 
-namespace mz {
-// Replaced in full by Task 6.
-MuZeroNetwork::Losses MuZeroNetwork::trainStep(const std::vector<UnrolledSample>&, float) {
-    return Losses{};
+    for (Dense* layer : {&hFc1_, &hFc2_, &gFc1_, &gFc2_, &gReward_, &fFc1_, &fPolicy_, &fValue_}) {
+        layer->zeroGrad();
+    }
+
+    Losses losses;
+
+    for (const UnrolledSample& sample : batch) {
+        const int K = static_cast<int>(sample.actions.size());
+        assert(static_cast<int>(sample.targetValues.size()) == K + 1);
+        assert(static_cast<int>(sample.targetRewards.size()) == K + 1);
+        assert(static_cast<int>(sample.targetPolicies.size()) == K + 1);
+
+        // Every unroll step past 0 contributes at 1/K, so a deeply
+        // unrolled sample does not outweigh a shallow one.
+        const float tailScale = (K > 0) ? 1.0f / static_cast<float>(K) : 1.0f;
+        auto lossScale = [&](int k) { return k == 0 ? 1.0f : tailScale; };
+
+        // ---- forward, keeping everything the backward pass will need ----
+
+        HiddenTrace hTrace = representationHidden(sample.observation);
+        std::vector<std::vector<float>> latentPre(K + 1);   // gFc2/hFc2 output, pre-normalization
+        std::vector<std::vector<float>> latent(K + 1);      // after minMaxNormalize
+
+        latentPre[0] = hFc2_.forward(hTrace.activation);
+        latent[0] = minMaxNormalize(latentPre[0]);
+
+        std::vector<std::vector<float>> dynamicsInput(K);
+        std::vector<HiddenTrace> dynamicsTrace(K);
+        std::vector<float> reward(K + 1, 0.0f);
+        std::vector<float> rewardPre(K + 1, 0.0f);
+
+        for (int k = 0; k < K; ++k) {
+            dynamicsInput[k] = makeDynamicsInput(latent[k], sample.actions[k]);
+            dynamicsTrace[k] = dynamicsHidden(dynamicsInput[k]);
+            latentPre[k + 1] = gFc2_.forward(dynamicsTrace[k].activation);
+            latent[k + 1] = minMaxNormalize(latentPre[k + 1]);
+            rewardPre[k + 1] = gReward_.forward(dynamicsTrace[k].activation)[0];
+            reward[k + 1] = std::tanh(rewardPre[k + 1]);
+        }
+
+        std::vector<HiddenTrace> predictionTrace(K + 1);
+        std::vector<std::array<float, kActionSize>> policy(K + 1);
+        std::vector<float> value(K + 1, 0.0f);
+
+        for (int k = 0; k <= K; ++k) {
+            predictionTrace[k] = predictionHidden(latent[k]);
+            policy[k] = softmax9(fPolicy_.forward(predictionTrace[k].activation));
+            value[k] = std::tanh(fValue_.forward(predictionTrace[k].activation)[0]);
+        }
+
+        // ---- loss ----
+
+        for (int k = 0; k <= K; ++k) {
+            float scale = lossScale(k);
+            float valueError = value[k] - sample.targetValues[k];
+            losses.value += scale * valueError * valueError;
+            for (int a = 0; a < kActionSize; ++a) {
+                losses.policy -= scale * sample.targetPolicies[k][a] * std::log(policy[k][a] + 1e-8f);
+            }
+            // targetRewards[0] is always 0 and excluded: step 0 has no
+            // incoming transition to predict a reward for.
+            if (k > 0) {
+                float rewardError = reward[k] - sample.targetRewards[k];
+                losses.reward += scale * rewardError * rewardError;
+            }
+        }
+
+        // ---- backward through time ----
+
+        // dLatent[k] accumulates dLoss/dLatent[k] from two sources: the
+        // prediction head at step k, and the dynamics step k -> k+1. The
+        // single reverse loop guarantees both have arrived before it is
+        // used.
+        std::vector<std::vector<float>> dLatent(K + 1, std::vector<float>(kLatentSize, 0.0f));
+
+        for (int k = K; k >= 0; --k) {
+            float scale = lossScale(k);
+
+            // prediction head at step k
+            float dValuePre = scale * 2.0f * (value[k] - sample.targetValues[k]) *
+                              (1.0f - value[k] * value[k]);
+            std::vector<float> dPolicyLogits(kActionSize);
+            for (int a = 0; a < kActionSize; ++a) {
+                // d(cross-entropy o softmax)/d(logit) = p - target
+                dPolicyLogits[a] = scale * (policy[k][a] - sample.targetPolicies[k][a]);
+            }
+
+            std::vector<float> dPredictionHidden =
+                fValue_.backward(predictionTrace[k].activation, {dValuePre});
+            std::vector<float> dFromPolicy =
+                fPolicy_.backward(predictionTrace[k].activation, dPolicyLogits);
+            for (int i = 0; i < kHiddenSize; ++i) dPredictionHidden[i] += dFromPolicy[i];
+
+            std::vector<float> dPredictionPre =
+                reluBackward(predictionTrace[k].preActivation, dPredictionHidden);
+            std::vector<float> dFromPrediction = fFc1_.backward(latent[k], dPredictionPre);
+            for (int i = 0; i < kLatentSize; ++i) dLatent[k][i] += dFromPrediction[i];
+
+            if (k > 0) {
+                // dynamics step k-1 -> k
+                std::vector<float> dLatentPre = minMaxNormalizeBackward(latentPre[k], dLatent[k]);
+                std::vector<float> dDynamicsHidden =
+                    gFc2_.backward(dynamicsTrace[k - 1].activation, dLatentPre);
+
+                float dRewardPre = scale * 2.0f * (reward[k] - sample.targetRewards[k]) *
+                                   (1.0f - reward[k] * reward[k]);
+                std::vector<float> dFromReward =
+                    gReward_.backward(dynamicsTrace[k - 1].activation, {dRewardPre});
+                for (int i = 0; i < kHiddenSize; ++i) dDynamicsHidden[i] += dFromReward[i];
+
+                std::vector<float> dDynamicsPre =
+                    reluBackward(dynamicsTrace[k - 1].preActivation, dDynamicsHidden);
+                std::vector<float> dDynamicsInput =
+                    gFc1_.backward(dynamicsInput[k - 1], dDynamicsPre);
+
+                // The half gradient. Scaling what flows back into the
+                // dynamics input by 0.5 at every step keeps gradient
+                // magnitude from compounding across the recurrence. One
+                // line, easy to omit, and omitting it destabilizes latents
+                // as the unroll deepens.
+                for (int i = 0; i < kLatentSize; ++i) dLatent[k - 1][i] += 0.5f * dDynamicsInput[i];
+            } else {
+                // representation network
+                std::vector<float> dLatentPre = minMaxNormalizeBackward(latentPre[0], dLatent[0]);
+                std::vector<float> dHidden = hFc2_.backward(hTrace.activation, dLatentPre);
+                std::vector<float> dHiddenPre = reluBackward(hTrace.preActivation, dHidden);
+                std::vector<float> observation(sample.observation.begin(), sample.observation.end());
+                hFc1_.backward(observation, dHiddenPre);
+            }
+        }
+    }
+
+    const float scale = 1.0f / static_cast<float>(batch.size());
+    for (Dense* layer : {&hFc1_, &hFc2_, &gFc1_, &gFc2_, &gReward_, &fFc1_, &fPolicy_, &fValue_}) {
+        layer->applySgd(learningRate, scale);
+    }
+
+    losses.value *= scale;
+    losses.policy *= scale;
+    losses.reward *= scale;
+    losses.total = losses.value + losses.policy + losses.reward;
+    return losses;
 }
+
 } // namespace mz
