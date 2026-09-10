@@ -12,6 +12,7 @@ add_library(mz
     src/board.cpp
     src/minimax.cpp
     src/mlp.cpp
+    src/network.cpp
     src/replay_buffer.cpp
     src/targets.cpp
 )
@@ -34,5 +35,6 @@ endfunction()
 mz_add_test(test_board)
 mz_add_test(test_minimax)
 mz_add_test(test_mlp)
+mz_add_test(test_network)
 mz_add_test(test_replay_buffer)
 mz_add_test(test_targets)
