@@ -78,7 +78,7 @@ void test_dense_input_gradient_matches_numerical() {
     assertClose(analytic, numericalInputGradient(loss, x), 1e-2f, "dense dInput");
 }
 
-void test_dense_weight_gradient_matches_numerical() {
+void test_sgd_step_decreases_the_loss() {
     std::mt19937 rng(11);
     Dense layer(4, 3, rng);
     std::vector<float> x = wellSeparated(4, rng);
@@ -105,6 +105,55 @@ void test_dense_weight_gradient_matches_numerical() {
     // Gradient descent must decrease this loss, and by roughly
     // rate * ||grad||^2 > 0.
     assert(after < before);
+}
+
+void test_dense_weight_gradient_matches_numerical() {
+    std::mt19937 rng(11);
+    Dense layer(4, 3, rng);
+    std::vector<float> x = wellSeparated(4, rng);
+    std::vector<float> dOut = {0.5f, -0.25f, 0.75f};
+
+    // Scalar loss = dot(dOut, layer(x)), whose dLoss/dOutput is exactly dOut.
+    auto lossOf = [&](const Dense& l) {
+        std::vector<float> y = l.forward(x);
+        float s = 0.0f;
+        for (std::size_t i = 0; i < y.size(); ++i) s += dOut[i] * y[i];
+        return s;
+    };
+
+    layer.zeroGrad();
+    layer.backward(x, dOut);
+
+    // Perturb each weight on its own and compare the central difference
+    // against the gradient backward() accumulated for that exact slot.
+    // A descent-direction check passes for a whole family of wrong
+    // gradients; this pins every element, including its index orientation,
+    // which is where a row-major/column-major slip would hide.
+    const float eps = 1e-2f;
+    for (int o = 0; o < layer.outDim(); ++o) {
+        for (int i = 0; i < layer.inDim(); ++i) {
+            float original = layer.weightAt(o, i);
+            Dense probe = layer;
+
+            probe.setWeightAt(o, i, original + eps);
+            float up = lossOf(probe);
+            probe.setWeightAt(o, i, original - eps);
+            float down = lossOf(probe);
+
+            float numeric = (up - down) / (2.0f * eps);
+            float analytic = layer.weightGradientAt(o, i);
+            if (std::fabs(numeric - analytic) > 1e-2f) {
+                std::printf("weight grad mismatch at (%d,%d): analytic=%.6f numeric=%.6f\n",
+                            o, i, analytic, numeric);
+                assert(false);
+            }
+        }
+    }
+
+    // Biases too: for an affine layer dLoss/db_o is just dOut_o.
+    for (int o = 0; o < layer.outDim(); ++o) {
+        assert(std::fabs(layer.biasGradientAt(o) - dOut[o]) < 1e-5f);
+    }
 }
 
 void test_backward_accumulates_across_calls() {
@@ -171,6 +220,25 @@ void test_minmax_normalize_backward_matches_numerical() {
     assertClose(minMaxNormalizeBackward(z, dOut), numericalInputGradient(loss, z), 2e-2f, "minmax");
 }
 
+void test_minmax_normalize_backward_on_a_clamped_range() {
+    // A constant input pins the denominator at the 1e-5 floor. A finite
+    // difference cannot reach this branch: any perturbation big enough to
+    // measure is a hundred times the floor and lands back in the unclamped
+    // regime, where a different formula applies. So check the closed form
+    // directly. With the denominator a constant d, y_i = (z_i - min)/d,
+    // giving dL/dz_j = dOut_j/d - [j == argmin] * S/d, where S = sum(dOut).
+    std::vector<float> z = {2.0f, 2.0f, 2.0f};
+    std::vector<float> dOut = {0.3f, -0.5f, 0.9f};
+    std::vector<float> got = minMaxNormalizeBackward(z, dOut);
+
+    const float d = 1e-5f;
+    const float S = 0.3f - 0.5f + 0.9f;
+    // std::min_element returns the FIRST minimum, so argmin is index 0.
+    std::vector<float> want = {0.3f / d - S / d, -0.5f / d, 0.9f / d};
+    assertClose(got, want, 1e-4f, "minmax clamped");
+    for (float v : got) assert(std::isfinite(v));
+}
+
 void test_softmax9_sums_to_one() {
     std::vector<float> logits = {1.0f, 2.0f, 3.0f, 0.0f, -1.0f, 0.5f, 0.5f, 2.5f, -2.0f};
     std::array<float, 9> p = softmax9(logits);
@@ -209,12 +277,14 @@ void test_dense_write_read_round_trips() {
 int main() {
     test_forward_shape_and_value();
     test_dense_input_gradient_matches_numerical();
+    test_sgd_step_decreases_the_loss();
     test_dense_weight_gradient_matches_numerical();
     test_backward_accumulates_across_calls();
     test_relu_backward_matches_numerical();
     test_minmax_normalize_maps_into_unit_range();
     test_minmax_normalize_handles_constant_input();
     test_minmax_normalize_backward_matches_numerical();
+    test_minmax_normalize_backward_on_a_clamped_range();
     test_softmax9_sums_to_one();
     test_softmax9_is_shift_invariant_and_stable();
     test_dense_write_read_round_trips();

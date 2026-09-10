@@ -64,6 +64,29 @@ void Dense::applySgd(float learningRate, float scale) {
     for (size_t i = 0; i < b_.size(); ++i) b_[i] -= step * gradB_[i];
 }
 
+float Dense::weightAt(int outIndex, int inIndex) const {
+    assert(outIndex >= 0 && outIndex < outDim_);
+    assert(inIndex >= 0 && inIndex < inDim_);
+    return w_[static_cast<size_t>(outIndex) * inDim_ + inIndex];
+}
+
+void Dense::setWeightAt(int outIndex, int inIndex, float value) {
+    assert(outIndex >= 0 && outIndex < outDim_);
+    assert(inIndex >= 0 && inIndex < inDim_);
+    w_[static_cast<size_t>(outIndex) * inDim_ + inIndex] = value;
+}
+
+float Dense::weightGradientAt(int outIndex, int inIndex) const {
+    assert(outIndex >= 0 && outIndex < outDim_);
+    assert(inIndex >= 0 && inIndex < inDim_);
+    return gradW_[static_cast<size_t>(outIndex) * inDim_ + inIndex];
+}
+
+float Dense::biasGradientAt(int outIndex) const {
+    assert(outIndex >= 0 && outIndex < outDim_);
+    return gradB_[outIndex];
+}
+
 void Dense::write(std::ostream& out) const {
     out.write(reinterpret_cast<const char*>(w_.data()), w_.size() * sizeof(float));
     out.write(reinterpret_cast<const char*>(b_.data()), b_.size() * sizeof(float));

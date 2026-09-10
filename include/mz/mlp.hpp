@@ -41,6 +41,15 @@ public:
     // theta -= learningRate * scale * grad. `scale` is normally 1/batchSize.
     void applySgd(float learningRate, float scale);
 
+    // Parameter access. Public because a hand-written layer with no
+    // autograd behind it has to be gradient-checkable from outside, and
+    // because write()/read() already exposes exactly this state.
+    // Precondition on all four: indices in range (asserted).
+    float weightAt(int outIndex, int inIndex) const;
+    void setWeightAt(int outIndex, int inIndex, float value);
+    float weightGradientAt(int outIndex, int inIndex) const;
+    float biasGradientAt(int outIndex) const;
+
     void write(std::ostream& out) const;
     void read(std::istream& in);
 
