@@ -12,6 +12,7 @@ add_library(mz
     src/board.cpp
     src/minimax.cpp
     src/mlp.cpp
+    src/replay_buffer.cpp
 )
 target_include_directories(mz PUBLIC include)
 
@@ -32,3 +33,4 @@ endfunction()
 mz_add_test(test_board)
 mz_add_test(test_minimax)
 mz_add_test(test_mlp)
+mz_add_test(test_replay_buffer)
