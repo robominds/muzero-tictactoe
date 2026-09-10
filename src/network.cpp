@@ -190,15 +190,13 @@ MuZeroNetwork::Losses MuZeroNetwork::trainStep(const std::vector<UnrolledSample>
         std::vector<std::vector<float>> dynamicsInput(K);
         std::vector<HiddenTrace> dynamicsTrace(K);
         std::vector<float> reward(K + 1, 0.0f);
-        std::vector<float> rewardPre(K + 1, 0.0f);
 
         for (int k = 0; k < K; ++k) {
             dynamicsInput[k] = makeDynamicsInput(latent[k], sample.actions[k]);
             dynamicsTrace[k] = dynamicsHidden(dynamicsInput[k]);
             latentPre[k + 1] = gFc2_.forward(dynamicsTrace[k].activation);
             latent[k + 1] = minMaxNormalize(latentPre[k + 1]);
-            rewardPre[k + 1] = gReward_.forward(dynamicsTrace[k].activation)[0];
-            reward[k + 1] = std::tanh(rewardPre[k + 1]);
+            reward[k + 1] = std::tanh(gReward_.forward(dynamicsTrace[k].activation)[0]);
         }
 
         std::vector<HiddenTrace> predictionTrace(K + 1);

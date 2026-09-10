@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -231,9 +232,17 @@ namespace {
 UnrolledSample makeProbeSample(int unrollSteps) {
     UnrolledSample sample;
     sample.observation.fill(0.0f);
-    sample.observation[0] = 1.0f;
-    sample.observation[4] = 1.0f;
-    sample.observation[9 + 3] = 1.0f;
+    // A legal position (X on 0/4/6, O on 3/7), chosen so the nonzero
+    // entries line up with the columns the gradient sweep samples.
+    // hFc1's weight gradient is dHiddenPre[o] * observation[i], so a
+    // column where the observation is zero has an identically zero
+    // gradient and gets skipped -- with only squares 0 and 3 occupied
+    // the sweep could compare hFc1 on two columns out of six.
+    sample.observation[0] = 1.0f;       // X
+    sample.observation[4] = 1.0f;       // X
+    sample.observation[6] = 1.0f;       // X
+    sample.observation[9 + 3] = 1.0f;   // O
+    sample.observation[9 + 7] = 1.0f;   // O
 
     sample.actions.resize(unrollSteps);
     for (int k = 0; k < unrollSteps; ++k) sample.actions[k] = (k * 3 + 1) % 9;
@@ -372,7 +381,17 @@ void test_gradient_matches_numerical_across_every_layer() {
                     // kink artifact shrinks as the step shrinks; a genuine
                     // gradient error is there at every step size.
                     float refined = numericalGradient(id, o, i, original, eps / 3.0f);
-                    if (relativeError(analytic, refined) > 0.10f) {
+                    // The retry may only rescue a slot if the smaller step
+                    // actually moved TOWARD the analytic value. A central
+                    // difference gets noisier as the step shrinks (noise
+                    // goes as 1/eps, and the noise floor was sized for the
+                    // original eps), so "agrees at eps/3" alone would let a
+                    // noisier second look overturn a real disagreement. A
+                    // kink converges; a wrong gradient reads the same at
+                    // every step size.
+                    bool converging = relativeError(analytic, refined) <
+                                      relativeError(analytic, numeric);
+                    if (!converging || relativeError(analytic, refined) > 0.10f) {
                         std::printf("gradient mismatch layer %d slot (%d,%d): analytic=%.6f "
                                     "numeric=%.6f refined=%.6f rel=%.4f\n",
                                     static_cast<int>(id), o, i, analytic, numeric, refined,
@@ -399,55 +418,78 @@ void test_gradient_matches_numerical_across_every_layer() {
 }
 
 void test_half_gradient_scales_the_dynamics_input() {
-    // Pins the 0.5 itself, which the per-parameter check above cannot see
-    // because it deliberately switches the 0.5 off first.
+    // Pins the 0.5 exactly, rather than merely showing it is not 1.0.
     //
-    // The dynamics layers accumulate gradient from two kinds of source:
-    // their own step's heads, which the half gradient never touches, and
-    // everything downstream, which it attenuates once per unroll hop. So
-    // turning the half gradient off must CHANGE the dynamics gradients
-    // and must leave the prediction head's gradients alone -- the
-    // prediction head is only ever reached directly, never across a hop.
-    const int unrollSteps = 3;
-    std::vector<UnrolledSample> batch = {makeProbeSample(unrollSteps)};
+    // The accumulated gradient is polynomial in the scale s: writing
+    // dLatent[k] = pred_k + s * L(dLatent[k+1]), the slot dLatent[k] has
+    // degree K-k. A layer's own contribution at a step is linear in the
+    // dLatent it consumes, with no s applied there -- s enters only when a
+    // contribution is passed up to the next-shallower latent. So the
+    // dynamics layers, which consume dLatent[1..K], are affine in s exactly
+    // when K == 2, and the representation layers, which consume dLatent[0],
+    // are affine in s exactly when K == 1.
+    //
+    // Where it is affine, g(0.5) must be the exact midpoint of g(0) and
+    // g(1). That is an equality, and it fails for any other scale.
+    struct Case {
+        int unrollSteps;
+        MuZeroNetwork::LayerId first;
+        MuZeroNetwork::LayerId second;
+    };
+    const Case cases[] = {
+        {2, MuZeroNetwork::LayerId::DynamicsFc1, MuZeroNetwork::LayerId::DynamicsFc2},
+        {1, MuZeroNetwork::LayerId::RepresentationFc1, MuZeroNetwork::LayerId::RepresentationFc2},
+    };
 
-    MuZeroNetwork half(8675309);
-    assert(near(half.dynamicsGradientScale(), MuZeroNetwork::kHalfGradient));
-    half.trainStep(batch, 0.0f);
+    for (const Case& testCase : cases) {
+        std::vector<UnrolledSample> batch = {makeProbeSample(testCase.unrollSteps)};
 
-    MuZeroNetwork full(8675309);
-    full.setDynamicsGradientScale(1.0f);
-    full.trainStep(batch, 0.0f);
-
-    // The prediction head never sits downstream of a dynamics hop, so the
-    // two must agree there exactly.
-    for (MuZeroNetwork::LayerId id : {MuZeroNetwork::LayerId::PredictionPolicy,
-                                      MuZeroNetwork::LayerId::PredictionValue}) {
-        const Dense& a = half.layer(id);
-        const Dense& b = full.layer(id);
-        for (int o = 0; o < a.outDim(); ++o) {
-            for (int i = 0; i < a.inDim(); ++i) {
-                assert(near(a.weightGradientAt(o, i), b.weightGradientAt(o, i), 1e-6f));
-            }
-        }
-    }
-
-    // The dynamics layers do, so they must differ -- and differ downward,
-    // since attenuating a contribution cannot enlarge the total.
-    bool differs = false;
-    for (MuZeroNetwork::LayerId id : {MuZeroNetwork::LayerId::DynamicsFc1,
-                                      MuZeroNetwork::LayerId::DynamicsFc2}) {
-        const Dense& a = half.layer(id);
-        const Dense& b = full.layer(id);
-        for (int o = 0; o < a.outDim(); ++o) {
-            for (int i = 0; i < a.inDim(); ++i) {
-                if (std::fabs(a.weightGradientAt(o, i) - b.weightGradientAt(o, i)) > 1e-5f) {
-                    differs = true;
+        // Same starting parameters at all three scales; trainStep with a
+        // learning rate of zero fills the gradients and moves nothing.
+        auto gradientsAt = [&](float scale) {
+            MuZeroNetwork network(20260910);
+            network.setDynamicsGradientScale(scale);
+            network.trainStep(batch, 0.0f);
+            std::vector<float> out;
+            for (MuZeroNetwork::LayerId id : {testCase.first, testCase.second}) {
+                const Dense& layer = network.layer(id);
+                for (int o = 0; o < layer.outDim(); ++o) {
+                    for (int i = 0; i < layer.inDim(); ++i) {
+                        out.push_back(layer.weightGradientAt(o, i));
+                    }
                 }
             }
+            return out;
+        };
+
+        std::vector<float> atZero = gradientsAt(0.0f);
+        std::vector<float> atHalf = gradientsAt(MuZeroNetwork::kHalfGradient);
+        std::vector<float> atOne = gradientsAt(1.0f);
+        assert(atZero.size() == atHalf.size() && atHalf.size() == atOne.size());
+
+        // The scale must actually matter for these layers at this K,
+        // otherwise the midpoint identity below is satisfied trivially.
+        bool scaleMatters = false;
+        for (std::size_t i = 0; i < atZero.size(); ++i) {
+            if (std::fabs(atZero[i] - atOne[i]) > 1e-5f) scaleMatters = true;
         }
+        assert(scaleMatters);
+
+        int pinned = 0;
+        for (std::size_t i = 0; i < atHalf.size(); ++i) {
+            float midpoint = 0.5f * (atZero[i] + atOne[i]);
+            float spread = std::fabs(atZero[i] - atOne[i]);
+            if (spread < 1e-5f) continue;   // this slot carries no signal about s
+            if (std::fabs(atHalf[i] - midpoint) > 0.02f * spread) {
+                std::printf("half gradient not at the midpoint, K=%d slot %zu: "
+                            "g(0)=%.6f g(0.5)=%.6f g(1)=%.6f midpoint=%.6f\n",
+                            testCase.unrollSteps, i, atZero[i], atHalf[i], atOne[i], midpoint);
+                assert(false);
+            }
+            ++pinned;
+        }
+        assert(pinned >= 5);
     }
-    assert(differs);
 }
 
 void test_loss_uses_one_over_k_scaling() {
