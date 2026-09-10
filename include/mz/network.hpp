@@ -65,6 +65,29 @@ public:
     // One SGD step over a batch of unrolled samples. Implemented in Task 6.
     Losses trainStep(const std::vector<UnrolledSample>& batch, float learningRate);
 
+    // The eight layers, addressable for gradient checking. A hand-written
+    // network with no autograd behind it has to be checkable from outside,
+    // and save()/load() already round-trips exactly this state.
+    enum class LayerId {
+        RepresentationFc1, RepresentationFc2,
+        DynamicsFc1, DynamicsFc2, DynamicsReward,
+        PredictionFc1, PredictionPolicy, PredictionValue,
+    };
+    Dense& layer(LayerId id);
+    const Dense& layer(LayerId id) const;
+
+    // MuZero scales the gradient entering the dynamics network from its
+    // latent input by 0.5 at every unroll step, so gradient magnitude does
+    // not compound across the recurrence. That is a DELIBERATE deviation
+    // from the true gradient of the loss -- which means a per-parameter
+    // numerical gradient check, which necessarily measures the true
+    // gradient, cannot agree with the reverse pass unless the deviation is
+    // switched off first. Hence this seam. Training always leaves it at
+    // 0.5; only gradient checks touch it.
+    static constexpr float kHalfGradient = 0.5f;
+    float dynamicsGradientScale() const { return dynamicsGradientScale_; }
+    void setDynamicsGradientScale(float scale) { dynamicsGradientScale_ = scale; }
+
     void save(const std::string& path) const;
     void load(const std::string& path);
 
@@ -85,6 +108,8 @@ private:
     Dense hFc1_, hFc2_;                  // representation
     Dense gFc1_, gFc2_, gReward_;        // dynamics
     Dense fFc1_, fPolicy_, fValue_;      // prediction
+
+    float dynamicsGradientScale_ = kHalfGradient;
 };
 
 } // namespace mz

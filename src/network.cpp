@@ -136,6 +136,27 @@ void MuZeroNetwork::load(const std::string& path) {
     if (!in) throw std::runtime_error("MuZeroNetwork::load: truncated file " + path);
 }
 
+const Dense& MuZeroNetwork::layer(LayerId id) const {
+    switch (id) {
+        case LayerId::RepresentationFc1: return hFc1_;
+        case LayerId::RepresentationFc2: return hFc2_;
+        case LayerId::DynamicsFc1:       return gFc1_;
+        case LayerId::DynamicsFc2:       return gFc2_;
+        case LayerId::DynamicsReward:    return gReward_;
+        case LayerId::PredictionFc1:     return fFc1_;
+        case LayerId::PredictionPolicy:  return fPolicy_;
+        case LayerId::PredictionValue:   return fValue_;
+    }
+    // No default case above, so -Wswitch flags any enumerator added later.
+    assert(false && "MuZeroNetwork::layer: unhandled LayerId");
+    return hFc1_;
+}
+
+Dense& MuZeroNetwork::layer(LayerId id) {
+    // Delegates to the const overload rather than repeating the switch.
+    return const_cast<Dense&>(static_cast<const MuZeroNetwork*>(this)->layer(id));
+}
+
 MuZeroNetwork::Losses MuZeroNetwork::trainStep(const std::vector<UnrolledSample>& batch,
                                                float learningRate) {
     assert(!batch.empty());
@@ -259,8 +280,12 @@ MuZeroNetwork::Losses MuZeroNetwork::trainStep(const std::vector<UnrolledSample>
                 // dynamics input by 0.5 at every step keeps gradient
                 // magnitude from compounding across the recurrence. One
                 // line, easy to omit, and omitting it destabilizes latents
-                // as the unroll deepens.
-                for (int i = 0; i < kLatentSize; ++i) dLatent[k - 1][i] += 0.5f * dDynamicsInput[i];
+                // as the unroll deepens. Always 0.5 in training; a
+                // gradient check sets it to 1 to recover the true
+                // gradient. See MuZeroNetwork::setDynamicsGradientScale.
+                for (int i = 0; i < kLatentSize; ++i) {
+                    dLatent[k - 1][i] += dynamicsGradientScale_ * dDynamicsInput[i];
+                }
             } else {
                 // representation network
                 std::vector<float> dLatentPre = minMaxNormalizeBackward(latentPre[0], dLatent[0]);

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -283,16 +284,233 @@ void test_train_step_works_at_unroll_zero_and_one() {
     assert(std::isfinite(network.trainStep(one, 0.01f).total));
 }
 
-void test_gradient_matches_numerical_through_the_full_unroll() {
-    // The real test. A directional finite-difference check: pick a random
-    // direction in parameter space, and confirm the loss changes by the
-    // amount one SGD step along the gradient predicts.
+void test_gradient_matches_numerical_across_every_layer() {
+    // The real gradient check, and the reason this task exists.
     //
-    // A step of size `rate` along the negative gradient should reduce the
-    // loss by approximately rate * ||grad||^2, to first order. Measuring
-    // that at two step sizes and confirming the ratio is ~2 verifies the
-    // gradient is right in magnitude, not merely in sign -- which is what
-    // a missing 1/K scale or a missing half-gradient would break.
+    // The obvious alternative -- take an SGD step and confirm the loss
+    // drops by roughly what the gradient predicts -- cannot work here.
+    // To first order a step of size r drops the loss by r*|g|^2 -
+    // (r^2/2)*g'Hg, so scaling the whole gradient by any constant scales
+    // every measured drop by the same constant squared and cancels out of
+    // any ratio of drops. A missing half gradient is exactly such a
+    // rescaling, and would sail through.
+    //
+    // So perturb one parameter at a time and compare against the gradient
+    // trainStep accumulated for that exact slot. A learning rate of zero
+    // makes trainStep a pure loss-and-gradient evaluation: it computes the
+    // loss, fills every gradient buffer, then steps by nothing.
+    //
+    // The half gradient has to be switched off for this. It is a
+    // deliberate deviation from the true gradient of the loss, and a
+    // finite difference of the loss necessarily measures the true
+    // gradient, so with it left at 0.5 the dynamics layers disagree BY
+    // DESIGN -- measurably so: gFc1 and gFc2 come out at ~0.79-0.81 of
+    // the true gradient. test_half_gradient_scales_the_dynamics_input
+    // below is what pins the 0.5 itself.
+    const int unrollSteps = 3;
+    std::vector<UnrolledSample> batch = {makeProbeSample(unrollSteps)};
+
+    MuZeroNetwork network(8675309);
+    network.setDynamicsGradientScale(1.0f);   // measure the TRUE gradient
+    network.trainStep(batch, 0.0f);           // populates gradients, moves nothing
+
+    const MuZeroNetwork::LayerId layers[] = {
+        MuZeroNetwork::LayerId::RepresentationFc1,
+        MuZeroNetwork::LayerId::RepresentationFc2,
+        MuZeroNetwork::LayerId::DynamicsFc1,
+        MuZeroNetwork::LayerId::DynamicsFc2,
+        MuZeroNetwork::LayerId::DynamicsReward,
+        MuZeroNetwork::LayerId::PredictionFc1,
+        MuZeroNetwork::LayerId::PredictionPolicy,
+        MuZeroNetwork::LayerId::PredictionValue,
+    };
+
+    // Central difference of a float loss around 1.0 carries roughly 2e-4
+    // of absolute noise at this step size, so a 10% relative bar is only
+    // meaningful on gradients comfortably above 5e-3. Smaller slots are
+    // skipped rather than compared against noise.
+    const float eps = 3e-3f;
+    const float noiseFloor = 5e-3f;
+
+    auto numericalGradient = [&](MuZeroNetwork::LayerId id, int o, int i,
+                                 float original, float step) {
+        MuZeroNetwork up = network;
+        up.layer(id).setWeightAt(o, i, original + step);
+        float lossUp = up.trainStep(batch, 0.0f).total;
+
+        MuZeroNetwork down = network;
+        down.layer(id).setWeightAt(o, i, original - step);
+        float lossDown = down.trainStep(batch, 0.0f).total;
+
+        return (lossUp - lossDown) / (2.0f * step);
+    };
+    auto relativeError = [](float analytic, float numeric) {
+        return std::fabs(numeric - analytic) / std::fmax(std::fabs(analytic), std::fabs(numeric));
+    };
+
+    int checked = 0;
+    for (MuZeroNetwork::LayerId id : layers) {
+        const Dense& layer = network.layer(id);
+        int outStride = std::max(1, layer.outDim() / 6);
+        int inStride = std::max(1, layer.inDim() / 6);
+        int checkedHere = 0;
+
+        for (int o = 0; o < layer.outDim(); o += outStride) {
+            for (int i = 0; i < layer.inDim(); i += inStride) {
+                float analytic = layer.weightGradientAt(o, i);
+                if (std::fabs(analytic) < noiseFloor) continue;
+
+                float original = layer.weightAt(o, i);
+                float numeric = numericalGradient(id, o, i, original, eps);
+
+                if (relativeError(analytic, numeric) > 0.10f) {
+                    // Re-check at a third of the step before failing. This
+                    // network is piecewise linear -- ReLU, plus a min-max
+                    // normalization whose argmin and argmax can switch --
+                    // so a difference can straddle a kink and disagree for
+                    // reasons unrelated to the gradient being wrong. A
+                    // kink artifact shrinks as the step shrinks; a genuine
+                    // gradient error is there at every step size.
+                    float refined = numericalGradient(id, o, i, original, eps / 3.0f);
+                    if (relativeError(analytic, refined) > 0.10f) {
+                        std::printf("gradient mismatch layer %d slot (%d,%d): analytic=%.6f "
+                                    "numeric=%.6f refined=%.6f rel=%.4f\n",
+                                    static_cast<int>(id), o, i, analytic, numeric, refined,
+                                    relativeError(analytic, refined));
+                        assert(false);
+                    }
+                }
+                ++checkedHere;
+                ++checked;
+            }
+        }
+
+        // Every layer must contribute at least one real comparison. A
+        // layer the reverse pass never reaches would have all-zero
+        // gradients, skip every slot on the noise-floor test, and
+        // otherwise pass this test in silence.
+        if (checkedHere == 0) {
+            std::printf("no gradient slots checked for layer %d -- is it reached at all?\n",
+                        static_cast<int>(id));
+            assert(false);
+        }
+    }
+    assert(checked >= 20);
+}
+
+void test_half_gradient_scales_the_dynamics_input() {
+    // Pins the 0.5 itself, which the per-parameter check above cannot see
+    // because it deliberately switches the 0.5 off first.
+    //
+    // The dynamics layers accumulate gradient from two kinds of source:
+    // their own step's heads, which the half gradient never touches, and
+    // everything downstream, which it attenuates once per unroll hop. So
+    // turning the half gradient off must CHANGE the dynamics gradients
+    // and must leave the prediction head's gradients alone -- the
+    // prediction head is only ever reached directly, never across a hop.
+    const int unrollSteps = 3;
+    std::vector<UnrolledSample> batch = {makeProbeSample(unrollSteps)};
+
+    MuZeroNetwork half(8675309);
+    assert(near(half.dynamicsGradientScale(), MuZeroNetwork::kHalfGradient));
+    half.trainStep(batch, 0.0f);
+
+    MuZeroNetwork full(8675309);
+    full.setDynamicsGradientScale(1.0f);
+    full.trainStep(batch, 0.0f);
+
+    // The prediction head never sits downstream of a dynamics hop, so the
+    // two must agree there exactly.
+    for (MuZeroNetwork::LayerId id : {MuZeroNetwork::LayerId::PredictionPolicy,
+                                      MuZeroNetwork::LayerId::PredictionValue}) {
+        const Dense& a = half.layer(id);
+        const Dense& b = full.layer(id);
+        for (int o = 0; o < a.outDim(); ++o) {
+            for (int i = 0; i < a.inDim(); ++i) {
+                assert(near(a.weightGradientAt(o, i), b.weightGradientAt(o, i), 1e-6f));
+            }
+        }
+    }
+
+    // The dynamics layers do, so they must differ -- and differ downward,
+    // since attenuating a contribution cannot enlarge the total.
+    bool differs = false;
+    for (MuZeroNetwork::LayerId id : {MuZeroNetwork::LayerId::DynamicsFc1,
+                                      MuZeroNetwork::LayerId::DynamicsFc2}) {
+        const Dense& a = half.layer(id);
+        const Dense& b = full.layer(id);
+        for (int o = 0; o < a.outDim(); ++o) {
+            for (int i = 0; i < a.inDim(); ++i) {
+                if (std::fabs(a.weightGradientAt(o, i) - b.weightGradientAt(o, i)) > 1e-5f) {
+                    differs = true;
+                }
+            }
+        }
+    }
+    assert(differs);
+}
+
+void test_loss_uses_one_over_k_scaling() {
+    // Pins the 1/K, which no gradient check can see: 1/K is part of the
+    // loss DEFINITION, so dropping it rescales the loss and its gradient
+    // together and every self-consistent check still agrees. The only way
+    // to catch it is to recompute the loss independently and compare.
+    //
+    // initialInference and recurrentInference walk exactly the forward
+    // pass trainStep walks, so they give the per-step predictions without
+    // going near trainStep's own arithmetic.
+    const int K = 4;
+    std::vector<UnrolledSample> batch = {makeProbeSample(K)};
+    const UnrolledSample& sample = batch[0];
+
+    MuZeroNetwork network(202409);
+
+    std::vector<float> values, rewards;
+    std::vector<std::array<float, 9>> policies;
+
+    auto initial = network.initialInference(sample.observation);
+    values.push_back(initial.value);
+    rewards.push_back(0.0f);              // step 0 has no incoming transition
+    policies.push_back(initial.policy);
+
+    std::vector<float> latent = initial.latent;
+    for (int k = 1; k <= K; ++k) {
+        auto step = network.recurrentInference(latent, sample.actions[k - 1]);
+        latent = step.latent;
+        values.push_back(step.value);
+        rewards.push_back(step.reward);
+        policies.push_back(step.policy);
+    }
+
+    float expectedValue = 0.0f, expectedPolicy = 0.0f, expectedReward = 0.0f;
+    for (int k = 0; k <= K; ++k) {
+        // The scaling under test: step 0 at full weight, every later step
+        // at 1/K so a deep unroll does not outweigh a shallow one.
+        float scale = (k == 0) ? 1.0f : 1.0f / static_cast<float>(K);
+        float valueError = values[k] - sample.targetValues[k];
+        expectedValue += scale * valueError * valueError;
+        for (int a = 0; a < 9; ++a) {
+            expectedPolicy -= scale * sample.targetPolicies[k][a] * std::log(policies[k][a] + 1e-8f);
+        }
+        if (k > 0) {
+            float rewardError = rewards[k] - sample.targetRewards[k];
+            expectedReward += scale * rewardError * rewardError;
+        }
+    }
+
+    MuZeroNetwork::Losses losses = network.trainStep(batch, 0.0f);
+    assert(near(losses.value, expectedValue, 1e-4f));
+    assert(near(losses.policy, expectedPolicy, 1e-4f));
+    assert(near(losses.reward, expectedReward, 1e-4f));
+    assert(near(losses.total, expectedValue + expectedPolicy + expectedReward, 1e-4f));
+}
+
+void test_train_step_moves_downhill() {
+    // Direction only: an SGD step must move the loss downhill, which
+    // catches a sign error or a head the reverse pass never reaches.
+    // It says nothing about magnitude -- see the comment in
+    // test_gradient_matches_numerical_across_every_layer for why a ratio
+    // of loss drops is invariant to rescaling the whole gradient.
     const int unrollSteps = 4;
     std::vector<UnrolledSample> batch = {makeProbeSample(unrollSteps)};
 
@@ -313,7 +531,8 @@ void test_gradient_matches_numerical_through_the_full_unroll() {
     // Both steps must decrease the loss...
     assert(smallDrop > 0.0f);
     assert(largeDrop > 0.0f);
-    // ...and doubling the step must roughly double the decrease.
+    // ...and the drop must scale sanely with the step (a smoothness
+    // check on the loss surface, not a magnitude check on the gradient).
     float ratio = largeDrop / smallDrop;
     assert(ratio > 1.7f && ratio < 2.3f);
 }
@@ -357,7 +576,14 @@ void test_dynamics_gradient_reaches_every_unroll_step() {
     }
 
     std::vector<UnrolledSample> batch = {sample};
-    for (int i = 0; i < 50; ++i) trained.trainStep(batch, 0.05f);
+    // ONE iteration, not fifty. The construction above only holds at the
+    // starting parameters: after a single step the network no longer
+    // predicts what the targets say, step 0's own prediction head starts
+    // producing gradient of its own, and that alone moves the
+    // representation network regardless of whether anything traversed the
+    // dynamics chain. At 50 iterations this test passes even with
+    // backprop-through-time completely severed.
+    trained.trainStep(batch, 0.05f);
 
     Board board;
     auto before = reference.initialInference(board.encode());
@@ -404,7 +630,10 @@ int main() {
     test_train_step_reports_finite_decomposed_losses();
     test_train_step_reduces_loss_on_a_fixed_batch();
     test_train_step_works_at_unroll_zero_and_one();
-    test_gradient_matches_numerical_through_the_full_unroll();
+    test_gradient_matches_numerical_across_every_layer();
+    test_half_gradient_scales_the_dynamics_input();
+    test_loss_uses_one_over_k_scaling();
+    test_train_step_moves_downhill();
     test_dynamics_gradient_reaches_every_unroll_step();
     test_trained_weights_survive_a_checkpoint_round_trip();
     std::printf("all network tests passed\n");
