@@ -21,8 +21,12 @@
 - Search constants, fixed project-wide: `kPbCInit = 1.25f`, `kPbCBase = 19652.0f`, `kDiscount = 1.0f`.
 - Unroll length K defaults to 5. It is always called `unrollSteps` in code; `N` is reserved for the train loop's checkpoint/eval interval. Never reuse `K` for that interval.
 - Perspective convention, relied on by every component: a **value** is always from the perspective of the player to move in the state it describes; a **reward** is always from the perspective of the player who took the action producing it.
-- Commit after every task. Commit messages end with:
-  `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`
+- Commit after every task. End each commit message with the
+  `Co-Authored-By:` attribution trailer YOUR OWN session prescribes — the
+  harness issues a model-specific line, and it is more accurate for a
+  commit to credit the model that actually wrote it. The example trailers
+  shown in this plan's commit commands came from the planning session and
+  are illustrative, not literal: substitute your own.
 
 ---
 
@@ -1729,9 +1733,12 @@ This task builds inference and checkpointing. Training comes next, separately, b
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
+#include <random>
 #include <string>
 #include "mz/board.hpp"
 #include "mz/network.hpp"
+#include "mz/targets.hpp"
 
 using namespace mz;
 
@@ -2236,13 +2243,18 @@ The backward pass runs in one reverse loop so that each `dS[k]` is complete — 
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/test_network.cpp` (and add the new calls to `main`):
+Insert into `tests/test_network.cpp` **immediately before `main()`**, not at
+the end of the file. `main()` is the last thing Task 5 wrote, and a test
+function defined after `main` is not declared before the call to it inside
+`main`. Move the two new includes to the top of the file with the others.
+
+Then add the new calls to `main`:
 
 ```cpp
 // ---- Task 6: backprop-through-time ----
-
-#include <random>
-#include "mz/targets.hpp"
+// (These two includes belong at the TOP of the file, with the Task 5 ones.)
+//   #include <random>
+//   #include "mz/targets.hpp"
 
 namespace {
 
