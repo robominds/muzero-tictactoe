@@ -25,6 +25,7 @@ int main(int argc, char** argv) {
     mz::MuZeroNetwork network;
     mz::ReplayBuffer buffer(bufferCapacity);
     mz::SelfPlayConfig selfPlayConfig;
+    selfPlayConfig.numSimulations = 100;  // Task 11 tuning: see docs/results.md.
     mz::TargetConfig targetConfig;
     std::mt19937 rng(std::random_device{}());
 
