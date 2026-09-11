@@ -689,6 +689,88 @@ def render_toc(list_markdown: str):
     )
 
 
+# The sibling project's page is the design this one matches: an eyebrow
+# with the two player chips, a big title over a dek, a rule-topped meta
+# row, numbered section heads with the number set small and grey, a
+# concept chip under each heading, and asides as left-ruled tinted
+# callouts. Every rule for all of that already lives in the stylesheet
+# copied from that project; these builders emit the markup that uses it,
+# so the two documents read as a matched pair rather than as two pages
+# that happen to share a colour scheme.
+EYEBROW = "rlexp / muzero-tictactoe — code walkthrough"
+
+SECTION_HEADING = re.compile(r"^##\s+(?P<num>\d+)\s*—\s*(?P<title>.+)$")
+CONCEPT_LINE = re.compile(r"^\*\*Concept:\s*(?P<what>.+?)\*\*$", re.S)
+META_SPLIT = re.compile(r"\*\*([^*]+):\*\*")
+CALLOUT_LABEL = re.compile(r"^\s*<p><strong>(?P<label>[^<]+?)[.:]</strong>\s*(?P<rest>.*)$", re.S)
+
+
+def build_masthead(raw_blocks):
+    """The title block, from everything above the Contents list."""
+    title, dek, meta = None, None, None
+    for raw in raw_blocks:
+        text = raw.strip()
+        if text.startswith("# "):
+            title = text[2:].strip()
+        elif text.startswith("**Language:**"):
+            meta = text
+        elif text.startswith("*("):
+            # The "a richer, illustrated version exists" note. This IS that
+            # version, so it says nothing here.
+            continue
+        elif dek is None and not text.startswith(("#", "-", ">", "```", "|")):
+            dek = " ".join(text.split())
+
+    if title is None or dek is None or meta is None:
+        raise RuntimeError("masthead needs a '# title', a lead paragraph and a "
+                           "'**Language:** ...' line above '## Contents'")
+
+    parts = META_SPLIT.split(meta)
+    spans = []
+    for i in range(1, len(parts) - 1, 2):
+        label = parts[i].strip()
+        value = " ".join(parts[i + 1].split()).strip().rstrip("·").strip()
+        spans.append(f"      <span><b>{label}</b> {render_inline(value)}</span>")
+    if not spans:
+        raise RuntimeError("could not split the '**Language:** ...' line into meta fields")
+
+    return "\n".join([
+        f'    <div class="eyebrow"><span class="chip-x"></span>'
+        f'<span class="chip-o"></span> {EYEBROW}</div>',
+        f'    <h1 class="title">{render_inline(title)}</h1>',
+        f'    <p class="dek">{render_inline(dek)}</p>',
+        '    <div class="meta-row">',
+        *spans,
+        "    </div>",
+    ])
+
+
+def as_callout(html_block: str) -> str:
+    """Render a blockquote as the sibling's left-ruled tinted callout.
+
+    A leading bolded phrase becomes the small monospace label above the
+    body; the stylesheet uppercases it. A blockquote without one still
+    becomes a callout, just without a label.
+    """
+    inner = html_block.strip()
+    if not inner.startswith("<blockquote>"):
+        return html_block
+    inner = inner[len("<blockquote>"):]
+    if inner.endswith("</blockquote>"):
+        inner = inner[: -len("</blockquote>")]
+    inner = inner.strip()
+
+    m = CALLOUT_LABEL.match(inner)
+    if m:
+        label = m["label"].strip().lower()
+        body = "<p>" + m["rest"].lstrip()
+        return ('      <div class="callout">\n'
+                f'        <span class="cal-label">{label}</span>\n'
+                f"        {body}\n"
+                "      </div>")
+    return f'      <div class="callout">\n        {inner}\n      </div>'
+
+
 def build_html(markdown_text: str, stylesheet_html: str) -> str:
     blocks = parse_markdown(markdown_text)
 
@@ -699,11 +781,12 @@ def build_html(markdown_text: str, stylesheet_html: str) -> str:
     # the sidebar nav, and the article. The sibling project's page is laid
     # out the same way: a two-column grid with a sticky table of contents.
     toc_html = None
-    masthead_blocks = []
+    masthead_raw = []
     rendered = []
     seen_contents = False
     expecting_list = False
     expecting_rule = False
+    open_section = False
 
     diag1_inserted = False
     diag2_inserted = False
@@ -714,7 +797,7 @@ def build_html(markdown_text: str, stylesheet_html: str) -> str:
                 seen_contents = True
                 expecting_list = True
                 continue
-            masthead_blocks.append(html_block)
+            masthead_raw.append(raw)
             continue
         if expecting_list:
             expecting_list = False
@@ -729,6 +812,36 @@ def build_html(markdown_text: str, stylesheet_html: str) -> str:
             expecting_rule = False
             if stripped == "---":
                 continue   # the rule that separated Contents from the body
+
+        heading = SECTION_HEADING.match(stripped)
+        if heading:
+            if open_section:
+                rendered.append("    </section>")
+            # Reuse the id the parser already assigned. Calling slugify
+            # again would look like a second heading with the same text and
+            # earn a "-1" suffix, silently breaking every sidebar link.
+            existing = re.search(r'id="([^"]+)"', html_block)
+            if existing is None:
+                raise RuntimeError(f"heading block has no id: {stripped[:60]}")
+            slug = existing.group(1)
+            rendered.append(
+                f'    <section>\n'
+                f'      <div class="sec-head"><span class="sec-num">{heading["num"]}</span>'
+                f'<h2 id="{slug}">{render_inline(heading["title"])}</h2></div>'
+            )
+            open_section = True
+            continue
+
+        concept = CONCEPT_LINE.match(stripped)
+        if concept:
+            what = " ".join(concept["what"].split())
+            rendered.append(f'      <span class="concept">concept — {render_inline(what)}</span>')
+            continue
+
+        if stripped.startswith(">"):
+            rendered.append(as_callout(html_block))
+            continue
+
         rendered.append(html_block)
         if not diag1_inserted and "Everything below is latents." in raw:
             rendered.append(diag1)
@@ -739,12 +852,14 @@ def build_html(markdown_text: str, stylesheet_html: str) -> str:
 
     if not diag1_inserted or not diag2_inserted:
         raise RuntimeError("diagram insertion anchor not found -- markdown source changed?")
+    if open_section:
+        rendered.append("    </section>")
     if toc_html is None:
         raise RuntimeError('could not build the sidebar from the "## Contents" list -- '
                            "has its format changed?")
 
     article = "\n\n".join(rendered)
-    masthead = "\n\n".join(masthead_blocks)
+    masthead_html = build_masthead(masthead_raw)
 
     # Insert our additional CSS right before the closing </style> so the
     # copied block above it remains byte-for-byte verbatim.
@@ -769,7 +884,7 @@ def build_html(markdown_text: str, stylesheet_html: str) -> str:
 <body>
 <div class="shell">
   <div class="masthead">
-{masthead}
+{masthead_html}
   </div>
 {toc_html}
   <main>

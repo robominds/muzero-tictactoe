@@ -418,15 +418,14 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
 <body>
 <div class="shell">
   <div class="masthead">
-<h1 id="muzero-from-scratch">MuZero from Scratch</h1>
-
-<p>What happens when you take the rules away — a 9-square board, three small networks, and a tree search that plans inside a model it invented for itself, walked through against the actual C++ in this repository, section by section, in the order the code actually runs.</p>
-
-<p><em>(A richer, illustrated version of this document — with diagrams and syntax highlighting — is available as <code>docs/algorithm-explained.html</code>.)</em></p>
-
-<p><strong>Language:</strong> C++17, zero dependencies · <strong>Networks:</strong> <code>h</code> 18 → 64 → 32 · <code>g</code> 41 → 64 → {32, 1} · <code>f</code> 32 → 64 → {9, 1} · <strong>Result:</strong> 1 of 3 seeds reached <code>draws=100 / losses=0</code> against perfect play; the other two at the identical configuration reached <code>draws=50 / losses=50</code> and <code>draws=0 / losses=100</code></p>
-
-<p>This is the companion to the AlphaZero project's own <code>docs/algorithm-explained.md</code>, which walks the same reader through AlphaZero on the same game. The two projects share a board, a minimax opponent, an evaluation harness and a hand-written-backprop philosophy, and differ in exactly one thing: whether the search is allowed to know the rules. Every place that one difference propagates outward gets a <strong>vs AlphaZero</strong> callout below, where it arises. <a href="muzero-vs-alphazero.md"><code>muzero-vs-alphazero.md</code></a> collects them into a standalone comparison.</p>
+    <div class="eyebrow"><span class="chip-x"></span><span class="chip-o"></span> rlexp / muzero-tictactoe — code walkthrough</div>
+    <h1 class="title">MuZero from Scratch</h1>
+    <p class="dek">What happens when you take the rules away — a 9-square board, three small networks, and a tree search that plans inside a model it invented for itself, walked through against the actual C++ in this repository, section by section, in the order the code actually runs.</p>
+    <div class="meta-row">
+      <span><b>Language</b> C++17, zero dependencies</span>
+      <span><b>Networks</b> <code>h</code> 18 → 64 → 32 · <code>g</code> 41 → 64 → {32, 1} · <code>f</code> 32 → 64 → {9, 1}</span>
+      <span><b>Result</b> 1 of 3 seeds reached <code>draws=100 / losses=0</code> against perfect play; the other two at the identical configuration reached <code>draws=50 / losses=50</code> and <code>draws=0 / losses=100</code></span>
+    </div>
   </div>
   <nav class="toc">
     <div class="toc-label">Contents</div>
@@ -446,9 +445,10 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
     </ol>
   </nav>
   <main>
-<h2 id="00--the-problem-with-knowing-the-rules">00 — The problem with knowing the rules</h2>
+    <section>
+      <div class="sec-head"><span class="sec-num">00</span><h2 id="00--the-problem-with-knowing-the-rules">The problem with knowing the rules</h2></div>
 
-<p><strong>Concept: model-based vs. model-free reinforcement learning</strong></p>
+      <span class="concept">concept — model-based vs. model-free reinforcement learning</span>
 
 <p>An RL agent that plans has to answer a question before it can plan at all: <em>if I take this action, what happens?</em> The function that answers it is called a <strong>model</strong> of the environment. An agent that has one — and uses it to look ahead — is doing <strong>model-based</strong> RL. An agent that only learns which actions turned out well, without ever asking what they do, is doing <strong>model-free</strong> RL.</p>
 
@@ -469,15 +469,19 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
 
 <p>So: <strong>if you cannot simulate the game, what exactly do you need to predict in order to search?</strong> Not the next board — nothing in a tree search ever reads a board for its own sake. Search only ever asks a position three questions: <em>which moves look good here</em> (a policy), <em>how good is this for me</em> (a value), and <em>what did I collect getting here</em> (a reward). Predict those three, consistently, over some internal representation of your own choosing, and the search will run. That is the whole idea, and the next eleven sections are what it costs.</p>
 
-<blockquote>
-<p><strong>Why this matters beyond tic-tac-toe.</strong> "Learn only the parts of the model that the downstream computation consumes" is one of the most transferable ideas in modern RL. The classical alternative — learn to predict the next observation, then plan against your predictions — spends almost all its capacity on detail that no decision depends on. A model trained end-to-end through the planner is under no obligation to be a simulator; it is only obliged to be <em>useful to a planner</em>. That is a much weaker requirement, and weaker requirements are learnable from less data.</p>
-</blockquote>
+      <div class="callout">
+        <span class="cal-label">why this matters beyond tic-tac-toe</span>
+        <p>"Learn only the parts of the model that the downstream computation consumes" is one of the most transferable ideas in modern RL. The classical alternative — learn to predict the next observation, then plan against your predictions — spends almost all its capacity on detail that no decision depends on. A model trained end-to-end through the planner is under no obligation to be a simulator; it is only obliged to be <em>useful to a planner</em>. That is a much weaker requirement, and weaker requirements are learnable from less data.</p>
+      </div>
 
 <hr>
 
-<h2 id="01--three-functions-instead-of-one">01 — Three functions instead of one</h2>
+    </section>
 
-<p><strong>Concept: latent dynamics models</strong></p>
+    <section>
+      <div class="sec-head"><span class="sec-num">01</span><h2 id="01--three-functions-instead-of-one">Three functions instead of one</h2></div>
+
+      <span class="concept">concept — latent dynamics models</span>
 
 <p>AlphaZero has one network: board in, policy and value out. MuZero has three, and the split is the whole architecture.</p>
 
@@ -607,15 +611,19 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
 
 <p>Notice that <code>f</code> — <code>fFc1_</code>, <code>reluInto</code>, <code>fPolicy_</code>, <code>fValue_</code> — runs identically in both, into the same <code>ws.predPre</code>/<code>ws.pred</code> scratch. One prediction network, shared between "a real position I just looked at" and "a position I imagined four plies deep." That sharing is what forces the latents produced by <code>g</code> to live in the same space as the latents produced by <code>h</code>: they both have to be readable by the same <code>f</code>.</p>
 
-<blockquote>
-<p><strong>vs AlphaZero.</strong> AlphaZero has one network and one function signature: board in, (policy, value) out. Everything about the transition between positions — legality, terminality, the resulting board — is supplied by <code>Board</code>, which is ordinary non-learned code and is never wrong. MuZero replaces that supplied transition with <code>g</code>, a 41 → 64 → {32, 1} MLP that is wrong constantly. Everything else in this document follows from that substitution. See <a href="muzero-vs-alphazero.md"><code>muzero-vs-alphazero.md</code></a> for the full accounting.</p>
-</blockquote>
+      <div class="callout">
+        <span class="cal-label">vs alphazero</span>
+        <p>AlphaZero has one network and one function signature: board in, (policy, value) out. Everything about the transition between positions — legality, terminality, the resulting board — is supplied by <code>Board</code>, which is ordinary non-learned code and is never wrong. MuZero replaces that supplied transition with <code>g</code>, a 41 → 64 → {32, 1} MLP that is wrong constantly. Everything else in this document follows from that substitution. See <a href="muzero-vs-alphazero.md"><code>muzero-vs-alphazero.md</code></a> for the full accounting.</p>
+      </div>
 
 <hr>
 
-<h2 id="02--the-action-has-to-become-a-number">02 — The action has to become a number</h2>
+    </section>
 
-<p><strong>Concept: action encoding</strong></p>
+    <section>
+      <div class="sec-head"><span class="sec-num">02</span><h2 id="02--the-action-has-to-become-a-number">The action has to become a number</h2></div>
+
+      <span class="concept">concept — action encoding</span>
 
 <p>In AlphaZero, "apply action 4" is <code>board.applyMove(4)</code> — the integer indexes a cell, the cell gets a stone, done. In MuZero there is no board and no cell. The action has to reach the dynamics network as <em>input</em>, alongside the state, and the only thing a <code>Dense</code> layer accepts is a vector of floats. So the action becomes nine floats:</p>
 
@@ -709,15 +717,19 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
 
 <p>Bounded is not the same as correct — section 10 has the measurement showing how far these latents drift from the real game even when they stay in range. But unbounded would be fatal rather than merely inaccurate, and this is the one line that prevents it.</p>
 
-<blockquote>
-<p><strong>vs AlphaZero.</strong> AlphaZero's state representation cannot drift, because it is not produced by anything — it is the board. There is no equivalent of <code>minMaxNormalize</code> in the sibling project because there is no recurrence to stabilize.</p>
-</blockquote>
+      <div class="callout">
+        <span class="cal-label">vs alphazero</span>
+        <p>AlphaZero's state representation cannot drift, because it is not produced by anything — it is the board. There is no equivalent of <code>minMaxNormalize</code> in the sibling project because there is no recurrence to stabilize.</p>
+      </div>
 
 <hr>
 
-<h2 id="03--searching-a-model-you-cannot-see">03 — Searching a model you cannot see</h2>
+    </section>
 
-<p><strong>Concept: MCTS over learned state</strong></p>
+    <section>
+      <div class="sec-head"><span class="sec-num">03</span><h2 id="03--searching-a-model-you-cannot-see">Searching a model you cannot see</h2></div>
+
+      <span class="concept">concept — MCTS over learned state</span>
 
 <p>The search is PUCT-based Monte Carlo Tree Search, structurally the same as AlphaZero's: repeatedly walk from the root down to an unexpanded node, expand it, and back its value up the path. What changes is what "walking down" means.</p>
 
@@ -901,15 +913,19 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
 
 <p>One legal move, and playing it ends the game. A search that knew the rules would have exactly one child at the root and nothing at all below it: depth 1, forever. The test asserts <code>result.maxDepth &gt;= 2</code>. It passes.</p>
 
-<blockquote>
-<p><strong>vs AlphaZero.</strong> AlphaZero applies legality at every node, because <code>Board</code> is there at every node, and it stops at terminal positions with the exact outcome instead of a network estimate — which is why its search can find a forced win with a handful of simulations. MuZero's tree has neither. That single decision is the biggest source of wasted compute in this project and, per <code>docs/results.md</code>, plausibly the biggest source of its unreliability. See <a href="muzero-vs-alphazero.md"><code>muzero-vs-alphazero.md</code></a> on root-only legality; the spec's "Root-Only Legality" section argues why masking below the root would quietly hand back the rule knowledge the algorithm exists to do without.</p>
-</blockquote>
+      <div class="callout">
+        <span class="cal-label">vs alphazero</span>
+        <p>AlphaZero applies legality at every node, because <code>Board</code> is there at every node, and it stops at terminal positions with the exact outcome instead of a network estimate — which is why its search can find a forced win with a handful of simulations. MuZero's tree has neither. That single decision is the biggest source of wasted compute in this project and, per <code>docs/results.md</code>, plausibly the biggest source of its unreliability. See <a href="muzero-vs-alphazero.md"><code>muzero-vs-alphazero.md</code></a> on root-only legality; the spec's "Root-Only Legality" section argues why masking below the root would quietly hand back the rule knowledge the algorithm exists to do without.</p>
+      </div>
 
 <hr>
 
-<h2 id="04--q-values-of-unknown-scale">04 — Q values of unknown scale</h2>
+    </section>
 
-<p><strong>Concept: value normalization in search</strong></p>
+    <section>
+      <div class="sec-head"><span class="sec-num">04</span><h2 id="04--q-values-of-unknown-scale">Q values of unknown scale</h2></div>
+
+      <span class="concept">concept — value normalization in search</span>
 
 <p>PUCT compares two things that have to be on comparable scales: the accumulated evidence about a move (<code>Q</code>) and an exploration bonus derived from a prior probability. In AlphaZero that comparison is easy, because <code>Q</code> is a mean of <code>tanh</code> outputs and terminal outcomes — always in <code>[-1, 1]</code>, always directly comparable with a prior in <code>[0, 1]</code>.</p>
 
@@ -1005,15 +1021,19 @@ MuZero:     score(a) = normalize(Q(s,a))
 
 <p>Over an entire 100-simulation search, the log term contributes a total swing of about 0.005 on a factor of 1.25 — four tenths of one percent. Functionally this is AlphaZero's fixed <code>c_puct ≈ 1.25</code>. The header comment in <code>include/mz/mcts.hpp</code> says as much: it is here "because the mechanism, not its magnitude, is the point." Keeping it means this code is the real formula rather than a simplification a reader would then have to un-learn; pretending it does work here would be a lie.</p>
 
-<blockquote>
-<p><strong>vs AlphaZero.</strong> <code>MinMaxStats</code> has no counterpart in the sibling project, and it exists for exactly one reason: MuZero's <code>Q</code> includes a learned reward, so nobody knows its scale in advance. This is the smallest of the divergences and the most purely mechanical — it is what you must add to PUCT once values stop being guaranteed to live in <code>[-1, 1]</code>.</p>
-</blockquote>
+      <div class="callout">
+        <span class="cal-label">vs alphazero</span>
+        <p><code>MinMaxStats</code> has no counterpart in the sibling project, and it exists for exactly one reason: MuZero's <code>Q</code> includes a learned reward, so nobody knows its scale in advance. This is the smallest of the divergences and the most purely mechanical — it is what you must add to PUCT once values stop being guaranteed to live in <code>[-1, 1]</code>.</p>
+      </div>
 
 <hr>
 
-<h2 id="05--backup-through-alternating-players">05 — Backup through alternating players</h2>
+    </section>
 
-<p><strong>Concept: credit assignment with intermediate rewards</strong></p>
+    <section>
+      <div class="sec-head"><span class="sec-num">05</span><h2 id="05--backup-through-alternating-players">Backup through alternating players</h2></div>
+
+      <span class="concept">concept — credit assignment with intermediate rewards</span>
 
 <p>A simulation ends at a freshly expanded node with a value estimate from <code>f</code>. That estimate has to travel back up the path it came down, updating every node on the way. In a two-player zero-sum game it also has to flip sign at every ply — and in MuZero it has to pick up each node's predicted reward as it passes.</p>
 
@@ -1095,15 +1115,19 @@ MuZero:     score(a) = normalize(Q(s,a))
 
 <p>Note the <code>if (i &gt; 0)</code> guard: the root's own edge-<code>Q</code> is never recorded into <code>MinMaxStats</code>, because the root has no incoming edge. The companion test <code>test_backup_records_edge_q_but_not_the_root</code> pins that.</p>
 
-<blockquote>
-<p><strong>Why this matters beyond tic-tac-toe.</strong> Intermediate rewards are the normal case in RL — an Atari game pays points continuously, a robot pays energy costs at every step. AlphaZero's backup has no reward term at all because board games pay exactly once, at the end. MuZero's backup is written for the general case and then handed a domain where the reward happens to be zero almost everywhere. That the <em>same</em> line of code covers both is the point.</p>
-</blockquote>
+      <div class="callout">
+        <span class="cal-label">why this matters beyond tic-tac-toe</span>
+        <p>Intermediate rewards are the normal case in RL — an Atari game pays points continuously, a robot pays energy costs at every step. AlphaZero's backup has no reward term at all because board games pay exactly once, at the end. MuZero's backup is written for the general case and then handed a domain where the reward happens to be zero almost everywhere. That the <em>same</em> line of code covers both is the point.</p>
+      </div>
 
 <hr>
 
-<h2 id="06--what-the-game-actually-pays">06 — What the game actually pays</h2>
+    </section>
 
-<p><strong>Concept: reward as distinct from value</strong></p>
+    <section>
+      <div class="sec-head"><span class="sec-num">06</span><h2 id="06--what-the-game-actually-pays">What the game actually pays</h2></div>
+
+      <span class="concept">concept — reward as distinct from value</span>
 
 <p><strong>Reward</strong> is what the environment pays you for one transition. <strong>Value</strong> is what you expect to collect from here to the end. They are different quantities and MuZero predicts both, with separate heads.</p>
 
@@ -1135,15 +1159,19 @@ MuZero:     score(a) = normalize(Q(s,a))
 
 <p>Rewards live in <code>{−1, 0, +1}</code>. A mean absolute error of 0.77 on that set is very large — this is a model that frequently does not know a game just ended, or thinks one ended that did not. And this is the checkpoint that plays perfect defensive tic-tac-toe (<code>draws=100 losses=0</code>). Both things are true at once, and section 10 comes back to why.</p>
 
-<blockquote>
-<p><strong>vs AlphaZero.</strong> There is no reward head in the sibling project and nowhere it could go. <code>Board::outcome()</code> answers the question exactly, for free, at every node. The entire reward apparatus here — a head, a loss term, a target array, a perspective convention, a diagnostic — is the price of not having that call available.</p>
-</blockquote>
+      <div class="callout">
+        <span class="cal-label">vs alphazero</span>
+        <p>There is no reward head in the sibling project and nowhere it could go. <code>Board::outcome()</code> answers the question exactly, for free, at every node. The entire reward apparatus here — a head, a loss term, a target array, a perspective convention, a diagnostic — is the price of not having that call available.</p>
+      </div>
 
 <hr>
 
-<h2 id="07--targets-that-improve-with-the-network">07 — Targets that improve with the network</h2>
+    </section>
 
-<p><strong>Concept: bootstrapping and temporal-difference learning</strong></p>
+    <section>
+      <div class="sec-head"><span class="sec-num">07</span><h2 id="07--targets-that-improve-with-the-network">Targets that improve with the network</h2></div>
+
+      <span class="concept">concept — bootstrapping and temporal-difference learning</span>
 
 <p>This is the deepest difference between the two projects, and the one with consequences that reach furthest past tic-tac-toe.</p>
 
@@ -1264,15 +1292,19 @@ MuZero:     score(a) = normalize(Q(s,a))
 
 <p>Was it measured here? <strong>No</strong>, and <code>docs/results.md</code> is explicit that this is a real gap rather than a judgment: every one of the 23 training runs used <code>tdSteps = 32</code>. The results document also sharpens the case for trying it, from the probe finding that the value head is <em>already</em> correct (right signs, sensible magnitudes in both directions) under the outcome-target regime — so lowering <code>tdSteps</code> would not be repairing a broken value head, it would be asking whether a denser, earlier value signal changes what the <em>policy</em> head learns, since both heads share the trunk of <code>f</code>.</p>
 
-<blockquote>
-<p><strong>vs AlphaZero.</strong> This is the deepest divergence in the project, and it is worth separating what it costs from what it enables. It costs complexity and a tuning knob with no measured setting. What it enables is structural: because MuZero's target is the network's own opinion rather than a historical fact, <strong>old data gets better as the network gets better</strong>. That is the precondition for Reanalyze — periodically re-running search over stored trajectories with the current network and overwriting their targets in place. AlphaZero cannot do this at any price: its targets are final outcomes, and a stronger network cannot make a finished game have ended differently. The spec's "Reanalyze Readiness" section lists the three decisions here (whole-trajectory storage, mutable search targets, pure target construction) that leave room for it; <code>ReplayBuffer::replaceSearchTargets</code> is the hook, already written and currently unused. See <a href="muzero-vs-alphazero.md"><code>muzero-vs-alphazero.md</code></a> for the full treatment.</p>
-</blockquote>
+      <div class="callout">
+        <span class="cal-label">vs alphazero</span>
+        <p>This is the deepest divergence in the project, and it is worth separating what it costs from what it enables. It costs complexity and a tuning knob with no measured setting. What it enables is structural: because MuZero's target is the network's own opinion rather than a historical fact, <strong>old data gets better as the network gets better</strong>. That is the precondition for Reanalyze — periodically re-running search over stored trajectories with the current network and overwriting their targets in place. AlphaZero cannot do this at any price: its targets are final outcomes, and a stronger network cannot make a finished game have ended differently. The spec's "Reanalyze Readiness" section lists the three decisions here (whole-trajectory storage, mutable search targets, pure target construction) that leave room for it; <code>ReplayBuffer::replaceSearchTargets</code> is the hook, already written and currently unused. See <a href="muzero-vs-alphazero.md"><code>muzero-vs-alphazero.md</code></a> for the full treatment.</p>
+      </div>
 
 <hr>
 
-<h2 id="08--learning-through-five-copies-of-itself">08 — Learning through five copies of itself</h2>
+    </section>
 
-<p><strong>Concept: backpropagation through time</strong></p>
+    <section>
+      <div class="sec-head"><span class="sec-num">08</span><h2 id="08--learning-through-five-copies-of-itself">Learning through five copies of itself</h2></div>
+
+      <span class="concept">concept — backpropagation through time</span>
 
 <p>One training sample is not one position. It is an observation plus <code>K = 5</code> actions, and the loss is evaluated at all six unroll steps at once. The forward pass runs <code>h</code> once, then <code>g</code> five times, then <code>f</code> six times:</p>
 
@@ -1539,15 +1571,19 @@ MuZero:     score(a) = normalize(Q(s,a))
 
 <p>Four tests, four distinct blind spots, none of which subsumes another.</p>
 
-<blockquote>
-<p><strong>vs AlphaZero.</strong> The sibling project's backward pass is one page: two heads into one hidden layer, one gradient per weight, one call per example. No recurrence, no unroll, no accumulation across time, and therefore neither scaling rule and none of the traps above. The moment a model is learned and rolled forward inside the loss, backprop-through-time and everything in this section arrives with it.</p>
-</blockquote>
+      <div class="callout">
+        <span class="cal-label">vs alphazero</span>
+        <p>The sibling project's backward pass is one page: two heads into one hidden layer, one gradient per weight, one call per example. No recurrence, no unroll, no accumulation across time, and therefore neither scaling rule and none of the traps above. The moment a model is learned and rolled forward inside the loss, backprop-through-time and everything in this section arrives with it.</p>
+      </div>
 
 <hr>
 
-<h2 id="09--the-full-loop">09 — The full loop</h2>
+    </section>
 
-<p><strong>Concept: the training loop, and reading an evaluation honestly</strong></p>
+    <section>
+      <div class="sec-head"><span class="sec-num">09</span><h2 id="09--the-full-loop">The full loop</h2></div>
+
+      <span class="concept">concept — the training loop, and reading an evaluation honestly</span>
 
 <pre><code>   ┌──────────────┐      ┌─────────────────┐      ┌──────────────────┐
    │  self-play   │ ───▶ │  replay buffer  │ ───▶ │      train       │
@@ -1617,9 +1653,10 @@ eval vs minimax: wins=0 draws=40 losses=0</code></pre>
 
 <p>Do not read this as <em>MuZero just needs more iterations here</em>. It is not a tuning footnote. Two seeds at the same configuration and the same 800 iterations did not converge; <code>temperatureMoves=2</code> at 1500 iterations did not converge on any of three seeds, and seed 303 at that setting scored <code>losses=100</code> at both 400 <strong>and</strong> 1500 iterations, unchanged despite 3.75× the training. The training loss was still falling at the end of every run and the categorical score did not track it. What is missing is not iterations. It is reliability.</p>
 
-<blockquote>
-<p><strong>vs AlphaZero.</strong> Each MuZero iteration here does four times the gradient-step throughput of an AlphaZero iteration (40×64 samples versus 20×32), so 800 iterations is worth roughly 80× AlphaZero's total training samples — and it converged on one seed in three, where AlphaZero's much smaller budget converged in 20 iterations. Iteration counts are not a unit-comparable currency between the two projects (different architectures, different self-play loops, different target construction); nor is "converged" measured the same way — AlphaZero's number is a single reported run, not a seed grid — so treat both as context rather than a multiplier. The comparison that <em>is</em> precise is in the next section.</p>
-</blockquote>
+      <div class="callout">
+        <span class="cal-label">vs alphazero</span>
+        <p>Each MuZero iteration here does four times the gradient-step throughput of an AlphaZero iteration (40×64 samples versus 20×32), so 800 iterations is worth roughly 80× AlphaZero's total training samples — and it converged on one seed in three, where AlphaZero's much smaller budget converged in 20 iterations. Iteration counts are not a unit-comparable currency between the two projects (different architectures, different self-play loops, different target construction); nor is "converged" measured the same way — AlphaZero's number is a single reported run, not a seed grid — so treat both as context rather than a multiplier. The comparison that <em>is</em> precise is in the next section.</p>
+      </div>
 
 <h3 id="a-performance-pass-and-how-it-was-checked">A performance pass, and how it was checked</h3>
 
@@ -1631,9 +1668,12 @@ eval vs minimax: wins=0 draws=40 losses=0</code></pre>
 
 <hr>
 
-<h2 id="10--what-this-bought-and-what-it-cost">10 — What this bought, and what it cost</h2>
+    </section>
 
-<p><strong>Concept: when a learned model is worth it</strong></p>
+    <section>
+      <div class="sec-head"><span class="sec-num">10</span><h2 id="10--what-this-bought-and-what-it-cost">What this bought, and what it cost</h2></div>
+
+      <span class="concept">concept — when a learned model is worth it</span>
 
 <p>On tic-tac-toe, MuZero is strictly worse than AlphaZero, and it is worth being blunt about every dimension:</p>
 
@@ -1727,7 +1767,10 @@ eval vs minimax: wins=0 draws=40 losses=0</code></pre>
 
 <hr>
 
-<h2 id="11--concept-map">11 — Concept map</h2>
+    </section>
+
+    <section>
+      <div class="sec-head"><span class="sec-num">11</span><h2 id="11--concept-map">Concept map</h2></div>
 
 <p>A quick index back into the repository, and across to the sibling project, for whichever fundamental you want to see again in situ.</p>
 
@@ -1891,6 +1934,8 @@ eval vs minimax: wins=0 draws=40 losses=0</code></pre>
 <p>Seed 303 reproduces the one converged run exactly. Omit the seed and, on the evidence in <code>docs/results.md</code>, you have roughly one-in-three odds.</p>
 
 <p>Mark Castelluccio, designed and implemented with <a href="https://claude.com/claude-code">Claude Code</a>.</p>
+
+    </section>
   </main>
 </div>
 </body>
