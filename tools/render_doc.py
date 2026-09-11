@@ -63,7 +63,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 MD_PATH = REPO_ROOT / "docs" / "algorithm-explained.md"
 HTML_PATH = REPO_ROOT / "docs" / "algorithm-explained.html"
 SIBLING_HTML_PATH = REPO_ROOT.parent / "alphazero-tictactoe" / "docs" / "algorithm-explained.html"
-STYLE_END_LINE = 364  # brief: sibling's <style> block runs through this line, 1-indexed inclusive
+# The sibling's stylesheet is located by content rather than by line
+# number: it is the font <link> plus the <style> block. A hardcoded line
+# count silently breaks the moment that file gains or loses a line above
+# the stylesheet, which is exactly what happened when it grew a <head>.
 
 
 # ---------------------------------------------------------------------------
@@ -676,23 +679,34 @@ def build_html(markdown_text: str, stylesheet_html: str) -> str:
 
     article = "\n\n".join(rendered)
 
-    title = "MuZero from Scratch"
-    stylesheet_html = stylesheet_html.replace(
-        "<title>AlphaZero from Scratch</title>", f"<title>{title}</title>"
-    )
     # Insert our additional CSS right before the closing </style> so the
     # copied block above it remains byte-for-byte verbatim.
     stylesheet_html = stylesheet_html.replace(
         "</style>", f"{DIAGRAM_STYLE}\n</style>", 1
     )
 
-    page = f"""{stylesheet_html}
-
+    # A real document, not a bare fragment. Without a declared charset a
+    # browser has to guess, and Safari guesses a legacy encoding for local
+    # files -- which turns every em-dash, arrow and subscript in this
+    # document into mojibake. Chrome happens to sniff UTF-8 and looks fine,
+    # which is what makes the bug easy to miss. The meta must also sit in
+    # the first 1024 bytes to be honoured, so it goes first.
+    page = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MuZero from Scratch</title>
+{stylesheet_html}
+</head>
+<body>
 <div class="page">
 <main>
 {article}
 </main>
 </div>
+</body>
+</html>
 """
     return page
 
@@ -706,11 +720,23 @@ def main():
         return 1
 
     sibling_lines = SIBLING_HTML_PATH.read_text(encoding="utf-8").split("\n")
-    stylesheet_html = "\n".join(sibling_lines[:STYLE_END_LINE])
-    if "</style>" not in stylesheet_html:
-        print("error: sibling stylesheet slice does not end in </style> -- "
-              "STYLE_END_LINE may be stale", file=sys.stderr)
+    try:
+        link_index = next(i for i, l in enumerate(sibling_lines)
+                          if l.lstrip().startswith("<link rel=\"stylesheet\""))
+        style_start = next(i for i, l in enumerate(sibling_lines)
+                           if l.lstrip().startswith("<style"))
+        style_end = next(i for i, l in enumerate(sibling_lines)
+                         if l.lstrip().startswith("</style>"))
+    except StopIteration:
+        print("error: could not find the font <link> and <style> block in "
+              f"{SIBLING_HTML_PATH}", file=sys.stderr)
         return 1
+    if not style_start < style_end:
+        print("error: sibling <style> block looks malformed", file=sys.stderr)
+        return 1
+    stylesheet_html = "\n".join(
+        [sibling_lines[link_index]] + sibling_lines[style_start:style_end + 1]
+    )
 
     markdown_text = MD_PATH.read_text(encoding="utf-8")
     page = build_html(markdown_text, stylesheet_html)
