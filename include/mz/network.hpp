@@ -43,6 +43,23 @@ public:
         float value;
     };
 
+    // Caller-owned scratch for one inference. Reusing a single workspace
+    // across calls removes about ten vector allocations per network
+    // evaluation; at roughly a hundred evaluations per move, that traffic
+    // was about a quarter of training time.
+    //
+    // It belongs to the caller rather than the network so that inference
+    // stays safe to call concurrently on a shared network -- one workspace
+    // per thread. See Dense::forwardInto.
+    struct Workspace {
+        std::vector<float> observation;
+        std::vector<float> trunkPre, trunk;      // representation or dynamics hidden
+        std::vector<float> latentPre;            // before min-max normalization
+        std::vector<float> dynamicsInput;        // latent with the action one-hot
+        std::vector<float> predPre, pred;        // prediction hidden
+        std::vector<float> logits, scalar;
+    };
+
     struct Losses {
         float total = 0.0f;
         float value = 0.0f;
@@ -56,11 +73,15 @@ public:
     // h then f. Used at the search root, on the real board's encoding --
     // the only place an observation enters the system.
     InitialInference initialInference(const std::array<float, kObservationSize>& observation) const;
+    InitialInference initialInference(const std::array<float, kObservationSize>& observation,
+                                      Workspace& workspace) const;
 
     // g then f. Every non-root node in the tree is reached this way, with
     // no reference to the real board at all.
     // Precondition: latent.size() == kLatentSize, 0 <= action < 9 (asserted).
     RecurrentInference recurrentInference(const std::vector<float>& latent, int action) const;
+    RecurrentInference recurrentInference(const std::vector<float>& latent, int action,
+                                          Workspace& workspace) const;
 
     // One SGD step over a batch of unrolled samples.
     Losses trainStep(const std::vector<UnrolledSample>& batch, float learningRate);
@@ -92,18 +113,27 @@ public:
     void load(const std::string& path);
 
 private:
-    // Forward pieces shared by inference and training. Each returns the
-    // pre-activations training needs; inference discards them.
-    struct HiddenTrace {
-        std::vector<float> preActivation;   // before ReLU
-        std::vector<float> activation;      // after ReLU
+    static void fillDynamicsInput(const std::vector<float>& latent, int action,
+                                  std::vector<float>& out);
+
+    // Scratch for trainStep, kept alive between calls. Unrolling one
+    // sample allocated on the order of sixty vectors; at a few thousand
+    // samples per iteration that dominated the allocator traffic. Sizes
+    // settle after the first sample and the buffers are reused unchanged.
+    struct TrainScratch {
+        std::vector<float> observation, hiddenPre, hidden;
+        std::vector<std::vector<float>> latentPre, latent;
+        std::vector<std::vector<float>> dynamicsInput, dynamicsPre, dynamicsAct;
+        std::vector<std::vector<float>> predictionPre, predictionAct;
+        std::vector<std::array<float, kActionSize>> policy;
+        std::vector<float> reward, value;
+        std::vector<std::vector<float>> dLatent;
+        std::vector<float> dPolicyLogits, scalarGrad;
+        std::vector<float> dPredictionHidden, dFromPolicy, dPredictionPre, dFromPrediction;
+        std::vector<float> dLatentPre, dDynamicsHidden, dFromReward, dDynamicsPre, dDynamicsInput;
+        std::vector<float> dHidden, dHiddenPre;
     };
-
-    HiddenTrace representationHidden(const std::array<float, kObservationSize>& observation) const;
-    HiddenTrace dynamicsHidden(const std::vector<float>& dynamicsInput) const;
-    HiddenTrace predictionHidden(const std::vector<float>& latent) const;
-
-    static std::vector<float> makeDynamicsInput(const std::vector<float>& latent, int action);
+    TrainScratch scratch_;
 
     Dense hFc1_, hFc2_;                  // representation
     Dense gFc1_, gFc2_, gReward_;        // dynamics

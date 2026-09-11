@@ -1,6 +1,5 @@
 #pragma once
 #include <array>
-#include <memory>
 #include <random>
 #include <vector>
 #include "mz/board.hpp"
@@ -122,19 +121,38 @@ public:
                                   std::mt19937& rng, float alpha, float epsilon);
 
 private:
+    // Nodes live in an arena and address each other by index, rather than
+    // owning children through unique_ptr. A single search allocated on the
+    // order of a thousand nodes per move, each with its own latent vector,
+    // and that churn was the largest remaining source of allocator traffic
+    // once the layer buffers were fixed. The arena is reused across
+    // searches and its latent vectors keep their capacity, so a steady
+    // state allocates nothing at all.
     struct Node {
         BackupNode stats;
         float prior = 0.0f;
         bool expanded = false;
         std::vector<float> latent;
-        std::array<std::unique_ptr<Node>, 9> children{};
+        std::array<int, 9> children{};   // arena indices; -1 means no child
     };
 
-    int selectChild(const Node& parent, const MinMaxStats& stats) const;
+    // Hands back a reset node from the arena, growing it only if needed.
+    // Returns an index: a reference would dangle if the arena grew.
+    int acquireNode();
+
+    int selectChild(int parentIndex, const MinMaxStats& stats) const;
 
     const MuZeroNetwork& network_;
     MCTSConfig config_;
     std::mt19937& rng_;
+    // Scratch reused by every inference this search performs. One search
+    // runs hundreds of them, and a fresh set of buffers per call was the
+    // single largest source of allocator traffic in training.
+    mutable MuZeroNetwork::Workspace workspace_;
+    std::vector<Node> nodes_;
+    std::size_t nodeCount_ = 0;
+    std::vector<int> path_;
+    std::vector<BackupNode*> statsPath_;
 };
 
 } // namespace mz

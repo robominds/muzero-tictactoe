@@ -32,10 +32,26 @@ public:
     // Wx + b. const, so inference paths can hold the network by const ref.
     std::vector<float> forward(const std::vector<float>& input) const;
 
+    // The same, writing into a caller-owned buffer instead of allocating.
+    // The hot paths use these: returning a fresh vector from every layer
+    // application put roughly a quarter of training time in the allocator.
+    // `out` is resized as needed and fully overwritten.
+    //
+    // The buffers belong to the CALLER, deliberately. Parking scratch on
+    // the layer would make these methods unsafe to call concurrently on a
+    // shared network, which is exactly what parallel self-play would want
+    // to do. One workspace per thread keeps that option open.
+    void forwardInto(const std::vector<float>& input, std::vector<float>& out) const;
+
     // Given dLoss/dOutput, accumulates dLoss/dW and dLoss/db and returns
     // dLoss/dInput. `input` must be the input this gradient came from.
     std::vector<float> backward(const std::vector<float>& input,
                                 const std::vector<float>& dOutput);
+
+    // As backward(), writing dLoss/dInput into `dInput`. Still accumulates
+    // into the weight and bias gradients.
+    void backwardInto(const std::vector<float>& input, const std::vector<float>& dOutput,
+                      std::vector<float>& dInput);
 
     void zeroGrad();
     // theta -= learningRate * scale * grad. `scale` is normally 1/batchSize.
@@ -63,8 +79,11 @@ private:
 };
 
 std::vector<float> relu(const std::vector<float>& z);
+void reluInto(const std::vector<float>& z, std::vector<float>& out);
 // `z` is the PRE-activation; ReLU passes gradient only where z > 0.
 std::vector<float> reluBackward(const std::vector<float>& z, const std::vector<float>& dOut);
+void reluBackwardInto(const std::vector<float>& z, const std::vector<float>& dOut,
+                      std::vector<float>& out);
 
 // Numerically stable softmax over exactly 9 logits (the action space).
 std::array<float, 9> softmax9(const std::vector<float>& logits);
@@ -75,10 +94,13 @@ std::array<float, 9> softmax9(const std::vector<float>& logits);
 // it, applying dynamics repeatedly lets latent magnitudes drift and the
 // recurrence destabilizes.
 std::vector<float> minMaxNormalize(const std::vector<float>& z);
+void minMaxNormalizeInto(const std::vector<float>& z, std::vector<float>& out);
 
 // The gradient of minMaxNormalize, including the terms that flow through
 // min(z) and max(z) themselves -- treating them as constants would pass a
 // casual eyeball but fails the numerical gradient check in test_mlp.
 std::vector<float> minMaxNormalizeBackward(const std::vector<float>& z, const std::vector<float>& dOut);
+void minMaxNormalizeBackwardInto(const std::vector<float>& z, const std::vector<float>& dOut,
+                                 std::vector<float>& out);
 
 } // namespace mz

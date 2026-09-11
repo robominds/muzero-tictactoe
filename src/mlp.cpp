@@ -23,23 +23,33 @@ Dense::Dense(int inDim, int outDim, std::mt19937& rng)
     for (float& v : w_) v = dist(rng);
 }
 
-std::vector<float> Dense::forward(const std::vector<float>& input) const {
+void Dense::forwardInto(const std::vector<float>& input, std::vector<float>& out) const {
     assert(static_cast<int>(input.size()) == inDim_);
-    std::vector<float> out(outDim_);
+    // resize, not assign: every element is written below, so pre-zeroing
+    // would be wasted work on a buffer that is usually already the right
+    // size from the previous call.
+    out.resize(outDim_);
     for (int o = 0; o < outDim_; ++o) {
         float sum = b_[o];
         const float* row = &w_[static_cast<size_t>(o) * inDim_];
         for (int i = 0; i < inDim_; ++i) sum += row[i] * input[i];
         out[o] = sum;
     }
+}
+
+std::vector<float> Dense::forward(const std::vector<float>& input) const {
+    std::vector<float> out;
+    forwardInto(input, out);
     return out;
 }
 
-std::vector<float> Dense::backward(const std::vector<float>& input,
-                                   const std::vector<float>& dOutput) {
+void Dense::backwardInto(const std::vector<float>& input, const std::vector<float>& dOutput,
+                         std::vector<float>& dInput) {
     assert(static_cast<int>(input.size()) == inDim_);
     assert(static_cast<int>(dOutput.size()) == outDim_);
-    std::vector<float> dInput(inDim_, 0.0f);
+    // assign, not resize: dInput is summed into below, so it must start at
+    // zero even when the buffer is being reused.
+    dInput.assign(inDim_, 0.0f);
     for (int o = 0; o < outDim_; ++o) {
         float d = dOutput[o];
         float* gradRow = &gradW_[static_cast<size_t>(o) * inDim_];
@@ -50,6 +60,12 @@ std::vector<float> Dense::backward(const std::vector<float>& input,
         }
         gradB_[o] += d;
     }
+}
+
+std::vector<float> Dense::backward(const std::vector<float>& input,
+                                   const std::vector<float>& dOutput) {
+    std::vector<float> dInput;
+    backwardInto(input, dOutput, dInput);
     return dInput;
 }
 
@@ -97,16 +113,27 @@ void Dense::read(std::istream& in) {
     in.read(reinterpret_cast<char*>(b_.data()), b_.size() * sizeof(float));
 }
 
-std::vector<float> relu(const std::vector<float>& z) {
-    std::vector<float> out(z.size());
+void reluInto(const std::vector<float>& z, std::vector<float>& out) {
+    out.resize(z.size());
     for (size_t i = 0; i < z.size(); ++i) out[i] = z[i] > 0.0f ? z[i] : 0.0f;
+}
+
+std::vector<float> relu(const std::vector<float>& z) {
+    std::vector<float> out;
+    reluInto(z, out);
     return out;
 }
 
-std::vector<float> reluBackward(const std::vector<float>& z, const std::vector<float>& dOut) {
+void reluBackwardInto(const std::vector<float>& z, const std::vector<float>& dOut,
+                      std::vector<float>& out) {
     assert(z.size() == dOut.size());
-    std::vector<float> out(z.size());
+    out.resize(z.size());
     for (size_t i = 0; i < z.size(); ++i) out[i] = z[i] > 0.0f ? dOut[i] : 0.0f;
+}
+
+std::vector<float> reluBackward(const std::vector<float>& z, const std::vector<float>& dOut) {
+    std::vector<float> out;
+    reluBackwardInto(z, dOut, out);
     return out;
 }
 
@@ -124,17 +151,23 @@ std::array<float, 9> softmax9(const std::vector<float>& logits) {
     return out;
 }
 
-std::vector<float> minMaxNormalize(const std::vector<float>& z) {
+void minMaxNormalizeInto(const std::vector<float>& z, std::vector<float>& out) {
     assert(!z.empty());
     float lo = *std::min_element(z.begin(), z.end());
     float hi = *std::max_element(z.begin(), z.end());
     float denom = std::max(hi - lo, kMinMaxFloor);
-    std::vector<float> out(z.size());
+    out.resize(z.size());
     for (size_t i = 0; i < z.size(); ++i) out[i] = (z[i] - lo) / denom;
+}
+
+std::vector<float> minMaxNormalize(const std::vector<float>& z) {
+    std::vector<float> out;
+    minMaxNormalizeInto(z, out);
     return out;
 }
 
-std::vector<float> minMaxNormalizeBackward(const std::vector<float>& z, const std::vector<float>& dOut) {
+void minMaxNormalizeBackwardInto(const std::vector<float>& z, const std::vector<float>& dOut,
+                                 std::vector<float>& out) {
     assert(z.size() == dOut.size());
     // With y_i = (z_i - m) / d where m = min(z), M = max(z), d = M - m:
     //   dy_i/dz_j = (delta_ij - [j==argmin]) / d
@@ -147,7 +180,7 @@ std::vector<float> minMaxNormalizeBackward(const std::vector<float>& z, const st
     float range = hi - lo;
     float denom = std::max(range, kMinMaxFloor);
 
-    std::vector<float> out(z.size());
+    out.resize(z.size());
     float S = 0.0f, T = 0.0f;
     for (size_t i = 0; i < z.size(); ++i) {
         S += dOut[i];
@@ -165,6 +198,11 @@ std::vector<float> minMaxNormalizeBackward(const std::vector<float>& z, const st
         }
         out[j] = g;
     }
+}
+
+std::vector<float> minMaxNormalizeBackward(const std::vector<float>& z, const std::vector<float>& dOut) {
+    std::vector<float> out;
+    minMaxNormalizeBackwardInto(z, dOut, out);
     return out;
 }
 

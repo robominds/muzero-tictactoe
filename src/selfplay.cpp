@@ -16,8 +16,12 @@ GameHistory playSelfPlayGame(const MuZeroNetwork& network, const SelfPlayConfig&
     GameHistory game;
     int ply = 0;
 
+    // One search object for the whole game. Its node arena and inference
+    // buffers are reused across moves; a fresh MCTS per ply would throw
+    // them away and reallocate.
+    MCTS mcts(network, searchConfig, rng);
+
     while (!board.isTerminal()) {
-        MCTS mcts(network, searchConfig, rng);
         float temperature = (ply < config.temperatureMoves) ? 1.0f : 0.0f;
         MCTSResult result = mcts.run(board, temperature);
 
