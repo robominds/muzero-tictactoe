@@ -609,8 +609,9 @@ def diagram_training_graph() -> str:
 DIAGRAM_STYLE = """
 /* ---- additions for docs/algorithm-explained.html, not part of the ---- */
 /* ---- stylesheet copied verbatim from the sibling project above.      - */
-/* ---- these style the page shell and the two SVG diagrams.            - */
-.page{ max-width:800px; margin:0 auto; padding:48px 24px 96px; }
+/* ---- these style the two SVG diagrams. The page shell, the sticky   - */
+/* ---- table of contents and the masthead all come from the copied    - */
+/* ---- stylesheet above, which already defines them.                  - */
 /* A long, hyphen-free identifier (a test name, a namespaced symbol) has
    no natural break point; without this it can force horizontal page
    scroll on a narrow window even though normal prose wraps fine. */
@@ -656,16 +657,78 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
 """.strip()
 
 
+TOC_ITEM = re.compile(r"^-\s+\[(?P<num>\d+)\s*—\s*(?P<title>.+?)\]\((?P<href>#[^)]+)\)\s*$")
+
+
+def render_toc(list_markdown: str):
+    """Turn the markdown "## Contents" list into the sticky sidebar.
+
+    The list stays in the markdown because that is the source of truth and
+    reads correctly on its own; here it becomes a nav that stays put while
+    the article scrolls, which is what the sibling project's page does.
+    Returns None if the list is not in the expected shape, so a malformed
+    Contents falls back to rendering inline rather than vanishing.
+    """
+    items = []
+    for line in list_markdown.split("\n"):
+        if not line.strip():
+            continue
+        m = TOC_ITEM.match(line)
+        if not m:
+            return None
+        items.append(
+            f'      <li><a href="{m["href"]}"><span class="n">{m["num"]}</span>'
+            f'{render_inline(m["title"])}</a></li>'
+        )
+    if not items:
+        return None
+    return "\n".join(
+        ['  <nav class="toc">', '    <div class="toc-label">Contents</div>', "    <ol>"]
+        + items
+        + ["    </ol>", "  </nav>"]
+    )
+
+
 def build_html(markdown_text: str, stylesheet_html: str) -> str:
     blocks = parse_markdown(markdown_text)
 
     diag1 = diagram_search_tree()
     diag2 = diagram_training_graph()
 
+    # Split the document into the masthead (everything above "## Contents"),
+    # the sidebar nav, and the article. The sibling project's page is laid
+    # out the same way: a two-column grid with a sticky table of contents.
+    toc_html = None
+    masthead_blocks = []
     rendered = []
+    seen_contents = False
+    expecting_list = False
+    expecting_rule = False
+
     diag1_inserted = False
     diag2_inserted = False
     for raw, html_block in blocks:
+        stripped = raw.strip()
+        if not seen_contents:
+            if stripped == "## Contents":
+                seen_contents = True
+                expecting_list = True
+                continue
+            masthead_blocks.append(html_block)
+            continue
+        if expecting_list:
+            expecting_list = False
+            candidate = render_toc(stripped)
+            if candidate is not None:
+                toc_html = candidate
+                expecting_rule = True
+                continue
+            # Unrecognised shape: keep it inline rather than losing it.
+            rendered.append(html_block)
+        if expecting_rule:
+            expecting_rule = False
+            if stripped == "---":
+                continue   # the rule that separated Contents from the body
         rendered.append(html_block)
         if not diag1_inserted and "Everything below is latents." in raw:
             rendered.append(diag1)
@@ -676,8 +739,12 @@ def build_html(markdown_text: str, stylesheet_html: str) -> str:
 
     if not diag1_inserted or not diag2_inserted:
         raise RuntimeError("diagram insertion anchor not found -- markdown source changed?")
+    if toc_html is None:
+        raise RuntimeError('could not build the sidebar from the "## Contents" list -- '
+                           "has its format changed?")
 
     article = "\n\n".join(rendered)
+    masthead = "\n\n".join(masthead_blocks)
 
     # Insert our additional CSS right before the closing </style> so the
     # copied block above it remains byte-for-byte verbatim.
@@ -700,10 +767,14 @@ def build_html(markdown_text: str, stylesheet_html: str) -> str:
 {stylesheet_html}
 </head>
 <body>
-<div class="page">
-<main>
+<div class="shell">
+  <div class="masthead">
+{masthead}
+  </div>
+{toc_html}
+  <main>
 {article}
-</main>
+  </main>
 </div>
 </body>
 </html>

@@ -368,8 +368,9 @@
   @media (max-width:960px){ footer{ grid-column:1; } }
 /* ---- additions for docs/algorithm-explained.html, not part of the ---- */
 /* ---- stylesheet copied verbatim from the sibling project above.      - */
-/* ---- these style the page shell and the two SVG diagrams.            - */
-.page{ max-width:800px; margin:0 auto; padding:48px 24px 96px; }
+/* ---- these style the two SVG diagrams. The page shell, the sticky   - */
+/* ---- table of contents and the masthead all come from the copied    - */
+/* ---- stylesheet above, which already defines them.                  - */
 /* A long, hyphen-free identifier (a test name, a namespaced symbol) has
    no natural break point; without this it can force horizontal page
    scroll on a narrow window even though normal prose wraps fine. */
@@ -415,8 +416,8 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
 </style>
 </head>
 <body>
-<div class="page">
-<main>
+<div class="shell">
+  <div class="masthead">
 <h1 id="muzero-from-scratch">MuZero from Scratch</h1>
 
 <p>What happens when you take the rules away — a 9-square board, three small networks, and a tree search that plans inside a model it invented for itself, walked through against the actual C++ in this repository, section by section, in the order the code actually runs.</p>
@@ -426,26 +427,25 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
 <p><strong>Language:</strong> C++17, zero dependencies · <strong>Networks:</strong> <code>h</code> 18 → 64 → 32 · <code>g</code> 41 → 64 → {32, 1} · <code>f</code> 32 → 64 → {9, 1} · <strong>Result:</strong> 1 of 3 seeds reached <code>draws=100 / losses=0</code> against perfect play; the other two at the identical configuration reached <code>draws=50 / losses=50</code> and <code>draws=0 / losses=100</code></p>
 
 <p>This is the companion to the AlphaZero project's own <code>docs/algorithm-explained.md</code>, which walks the same reader through AlphaZero on the same game. The two projects share a board, a minimax opponent, an evaluation harness and a hand-written-backprop philosophy, and differ in exactly one thing: whether the search is allowed to know the rules. Every place that one difference propagates outward gets a <strong>vs AlphaZero</strong> callout below, where it arises. <a href="muzero-vs-alphazero.md"><code>muzero-vs-alphazero.md</code></a> collects them into a standalone comparison.</p>
-
-<h2 id="contents">Contents</h2>
-
-<ul>
-<li><a href="#00--the-problem-with-knowing-the-rules">00 — The problem with knowing the rules</a></li>
-<li><a href="#01--three-functions-instead-of-one">01 — Three functions instead of one</a></li>
-<li><a href="#02--the-action-has-to-become-a-number">02 — The action has to become a number</a></li>
-<li><a href="#03--searching-a-model-you-cannot-see">03 — Searching a model you cannot see</a></li>
-<li><a href="#04--q-values-of-unknown-scale">04 — Q values of unknown scale</a></li>
-<li><a href="#05--backup-through-alternating-players">05 — Backup through alternating players</a></li>
-<li><a href="#06--what-the-game-actually-pays">06 — What the game actually pays</a></li>
-<li><a href="#07--targets-that-improve-with-the-network">07 — Targets that improve with the network</a></li>
-<li><a href="#08--learning-through-five-copies-of-itself">08 — Learning through five copies of itself</a></li>
-<li><a href="#09--the-full-loop">09 — The full loop</a></li>
-<li><a href="#10--what-this-bought-and-what-it-cost">10 — What this bought, and what it cost</a></li>
-<li><a href="#11--concept-map">11 — Concept map</a></li>
-</ul>
-
-<hr>
-
+  </div>
+  <nav class="toc">
+    <div class="toc-label">Contents</div>
+    <ol>
+      <li><a href="#00--the-problem-with-knowing-the-rules"><span class="n">00</span>The problem with knowing the rules</a></li>
+      <li><a href="#01--three-functions-instead-of-one"><span class="n">01</span>Three functions instead of one</a></li>
+      <li><a href="#02--the-action-has-to-become-a-number"><span class="n">02</span>The action has to become a number</a></li>
+      <li><a href="#03--searching-a-model-you-cannot-see"><span class="n">03</span>Searching a model you cannot see</a></li>
+      <li><a href="#04--q-values-of-unknown-scale"><span class="n">04</span>Q values of unknown scale</a></li>
+      <li><a href="#05--backup-through-alternating-players"><span class="n">05</span>Backup through alternating players</a></li>
+      <li><a href="#06--what-the-game-actually-pays"><span class="n">06</span>What the game actually pays</a></li>
+      <li><a href="#07--targets-that-improve-with-the-network"><span class="n">07</span>Targets that improve with the network</a></li>
+      <li><a href="#08--learning-through-five-copies-of-itself"><span class="n">08</span>Learning through five copies of itself</a></li>
+      <li><a href="#09--the-full-loop"><span class="n">09</span>The full loop</a></li>
+      <li><a href="#10--what-this-bought-and-what-it-cost"><span class="n">10</span>What this bought, and what it cost</a></li>
+      <li><a href="#11--concept-map"><span class="n">11</span>Concept map</a></li>
+    </ol>
+  </nav>
+  <main>
 <h2 id="00--the-problem-with-knowing-the-rules">00 — The problem with knowing the rules</h2>
 
 <p><strong>Concept: model-based vs. model-free reinforcement learning</strong></p>
@@ -1891,7 +1891,7 @@ eval vs minimax: wins=0 draws=40 losses=0</code></pre>
 <p>Seed 303 reproduces the one converged run exactly. Omit the seed and, on the evidence in <code>docs/results.md</code>, you have roughly one-in-three odds.</p>
 
 <p>Mark Castelluccio, designed and implemented with <a href="https://claude.com/claude-code">Claude Code</a>.</p>
-</main>
+  </main>
 </div>
 </body>
 </html>
