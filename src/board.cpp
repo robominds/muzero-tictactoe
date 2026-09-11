@@ -11,7 +11,7 @@ constexpr int kLines[8][3] = {
 };
 }
 
-Board::Board() : toMove_(Cell::X) {
+Board::Board() : toMove_(Cell::X), outcome_(Outcome::Ongoing) {
     cells_.fill(Cell::Empty);
 }
 
@@ -43,20 +43,25 @@ Board Board::applyMove(int index) const {
     Board next = *this;
     next.cells_[index] = toMove_;
     next.toMove_ = (toMove_ == Cell::X) ? Cell::O : Cell::X;
+    next.refreshOutcome();
     return next;
 }
 
-Outcome Board::outcome() const {
+void Board::refreshOutcome() {
     for (const auto& line : kLines) {
         Cell a = cells_[line[0]], b = cells_[line[1]], c = cells_[line[2]];
         if (a != Cell::Empty && a == b && b == c) {
-            return a == Cell::X ? Outcome::XWins : Outcome::OWins;
+            outcome_ = (a == Cell::X) ? Outcome::XWins : Outcome::OWins;
+            return;
         }
     }
     for (int i = 0; i < 9; ++i) {
-        if (cells_[i] == Cell::Empty) return Outcome::Ongoing;
+        if (cells_[i] == Cell::Empty) {
+            outcome_ = Outcome::Ongoing;
+            return;
+        }
     }
-    return Outcome::Draw;
+    outcome_ = Outcome::Draw;
 }
 
 std::array<float, 18> Board::encode() const {
