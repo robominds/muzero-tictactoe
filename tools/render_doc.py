@@ -697,7 +697,7 @@ def render_toc(list_markdown: str):
 # copied from that project; these builders emit the markup that uses it,
 # so the two documents read as a matched pair rather than as two pages
 # that happen to share a colour scheme.
-EYEBROW = "rlexp / muzero-tictactoe — code walkthrough"
+EYEBROW = "muzero-tictactoe — code walkthrough"
 
 SECTION_HEADING = re.compile(r"^##\s+(?P<num>\d+)\s*—\s*(?P<title>.+)$")
 CONCEPT_LINE = re.compile(r"^\*\*Concept:\s*(?P<what>.+?)\*\*$", re.S)
