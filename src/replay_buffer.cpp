@@ -3,7 +3,8 @@
 
 namespace mz {
 
-ReplayBuffer::ReplayBuffer(std::size_t capacity) : capacity_(capacity) {
+ReplayBuffer::ReplayBuffer(std::size_t capacity, std::uint32_t seed)
+    : capacity_(capacity), rng_(seed) {
     assert(capacity > 0);
     games_.reserve(capacity);
 }

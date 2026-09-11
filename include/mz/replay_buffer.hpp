@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <random>
 #include <vector>
 #include "mz/game_history.hpp"
@@ -16,7 +17,10 @@ public:
         int position;
     };
 
-    explicit ReplayBuffer(std::size_t capacity);
+    // seed drives only the internal sampling RNG (samplePositions), for
+    // reproducible training runs. Defaults to a random seed, as before,
+    // when not given.
+    explicit ReplayBuffer(std::size_t capacity, std::uint32_t seed = std::random_device{}());
 
     void add(GameHistory game);
 
@@ -45,7 +49,7 @@ private:
     std::size_t capacity_;
     std::size_t nextIndex_ = 0;
     std::vector<GameHistory> games_;
-    mutable std::mt19937 rng_{std::random_device{}()};
+    mutable std::mt19937 rng_;
 };
 
 } // namespace mz

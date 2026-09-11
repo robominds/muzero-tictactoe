@@ -1,315 +1,449 @@
 # Training results
 
-## Headline result
+## Bottom line, stated plainly
 
-Across five training runs (400–800 iterations each), MuZero self-play
-against a learned model **did not reach `losses=0` and hold it**. The best
-checkpoints found (from two independent runs, `numSimulations=100`)
-score:
+**The spec's first success criterion — converging to drawing play against
+minimax — was not met.** Across 23 training runs (5 initial single-seed
+runs plus two 3-seed-per-cell grids, 400 to 1500 iterations each), the
+best configuration found (`numSimulations=100`, `temperatureMoves=6`,
+800 iterations) converged on **one of three seeds tested**. The other two
+seeds at that exact configuration ended at `draws=50 losses=50` and
+`draws=0 losses=100` respectively. A configuration that converges on one
+seed out of three has not converged, and no configuration tried converged
+on all three seeds of any cell.
+
+The one success is real and is reported below in full, because it is the
+only direct evidence in this project of what convergence looks like and
+because it pins down exactly what a converged checkpoint's search and
+policy look like in contrast to a failing one. But it is one lucky seed,
+not a solved configuration, and this document does not present it as
+more than that.
 
 ```
-$ ./build/evaluate checkpoint.bin 50
-vs minimax over 50 games/side: wins=0 draws=50 losses=50
+$ ./build/evaluate ckpt_sim100_it800_seed303.bin 50
+vs minimax over 50 games/side: wins=0 draws=100 losses=0
 ```
 
-`wins` was 0 in every single evaluation across every run (100+ evaluation
-calls total) — the minimax opponent and evaluation harness are correct.
-What is not fixed is `losses`: the best checkpoints reliably solve one
-side of the board (X or O, depending on the run) and reliably lose a
-specific line on the other side. `diag_eval` (below) shows the exact ply.
-This is reported honestly, per the task brief, as the best result reached
-within the allotted training-run budget — not a fabricated pass.
+`wins` was 0 in every evaluation across every one of the 23 runs (over
+150 separate `evaluate`/training-time-eval calls) — the minimax opponent
+and the evaluation harness are correct throughout. What did not
+reliably resolve is `losses`.
 
-## Final evaluation
+A `draws=50 losses=50` result — the second most common outcome across
+every grid — is not "half the games are bad." `evaluateAgainstMinimax`
+(`src/eval.cpp`) plays with a fixed RNG seed, no root Dirichlet noise, and
+a deterministic minimax opponent, so every game played as X is the
+identical game, and likewise for O. A `draws=50 losses=50` split means
+**the network plays one side perfectly and walks into the exact same
+losing line as the other side, every single time it is asked.** It is one
+wrong move in one position, repeated 50 times, not diffuse weakness. The
+`diag_eval` transcripts below show exactly which move and where.
 
-Games per side: 50 (100 games total). Best checkpoints (two separate
-400-iteration runs converged to this same split):
+## What actually localizes the failure
 
-| checkpoint | wins | draws | losses |
-|---|---|---|---|
-| `checkpoint_run2.bin` (`numSimulations=100`, defaults otherwise) | 0 | 50 | 50 |
-| `checkpoint_run4.bin` (`numSimulations=100`, `learningRate=0.01`) | 0 | 50 | 50 |
+A direct probe of two 1500-iteration checkpoints, querying
+`initialInference` on hand-built positions, separates the value head from
+the policy head:
 
-Both checkpoints show the same shape at the smaller 20-games/side
-evaluation used during training (`wins=0 draws=20 losses=20`), i.e. the
-result is reproducible, not a one-off sampling artifact — see "Why the
-losses land in round numbers" below.
+- **Value head: correct.** On a position where the player to move has an
+  immediate win, the value head reports roughly +0.54 to +0.65. On a
+  position where the player to move is in trouble, it reports roughly
+  −0.41 to −0.66. Right signs, sensible magnitudes, in both directions.
+  If the value target or the training gradient had a sign error, this is
+  the first thing it would destroy — it did not.
+- **Policy head: wrong in exactly the way that matters.** On "X to move,
+  and square 2 wins outright," the policy head's argmax lands on square 5
+  or 8, with only 0.09 to 0.32 of its mass on the winning move. It does
+  not see an immediate win.
+- **Search does not rescue the policy head, and cannot.** `diag_eval` at
+  400 simulations reports search tree depths of **18–19 on a nine-square
+  board** (we independently reproduced 18; a second measurement reported
+  19). A tic-tac-toe game cannot be more than 9 plies deep. Depth 18 means
+  most of a 400-simulation budget is spent below the point where any
+  legal game could still be running — imagined moves layered on imagined
+  moves, in positions the dynamics network invented and the real rules
+  would never reach. This is root-only legality doing exactly what the
+  spec predicted, more expensively than expected: it is not merely
+  "search sometimes explores an illegal branch," it is "the median
+  simulation is illegal by the time it terminates."
 
-The other three runs (baseline `numSimulations=60`, `numSimulations=160`,
-and a second `numSimulations=100`/default-learning-rate run at 800
-iterations with a different random seed) ended at `wins=0 draws=0
-losses=100` — complete failure, despite one of them (the 800-iteration
-run) using twice the training of the successful ones. See "Tuning
-history" for the full detail; the seed-to-seed variance turned out to
-matter more than any hyperparameter we changed.
+This rules out a sign bug or a broken training target as the cause — the
+gradient is verified per-parameter across all eight layers, the search
+backup was hand-derived, and the n-step targets were hand-computed
+against a fixture in earlier tasks; the value head's correct sign
+structure in both directions is exactly the evidence a sign error would
+not survive. The failure is localized to the policy head not learning a
+rare tactical pattern reliably, compounded by search that cannot fall
+back on ever touching real rules below the root to correct it.
 
-## Why the losses land in round numbers (0/20/40, 0/50/100)
+## `diag_eval`: the losing line, twice, in two different configurations
 
-`evaluateAgainstMinimax` (`src/eval.cpp`) plays with a **fixed RNG seed**,
-**no root Dirichlet noise**, and minimax opponents that are themselves
-deterministic. Every one of the `gamesPerSide` games played as X is
-therefore the identical game, and likewise for O. The eval score is
-consequently always an exact multiple of `gamesPerSide`: a run either
-solves a side completely or fails it completely, with nothing in between.
-This is expected behavior of the harness (not a bug), but it does mean a
-single tactical blind spot on one side is enough to pin `losses` at
-exactly half of all games, and it explains why intermediate scores in the
-logs jump between 0, 20, and 40 (or 0, 50, 100) rather than varying
-smoothly.
-
-## Diagnosing the loss: `diag_eval`
-
-Both `checkpoint_run2.bin` and `checkpoint_run4.bin` fail at the same
-*kind* of ply: an immediate three-in-a-row block. `checkpoint_run2.bin`
-loses playing O:
+**`numSimulations=100`, seed 202 (`draws=50 losses=50`), losing as O, at
+the trained simulation count:**
 
 ```
 === network plays O ===
-    . . .          X . .          X X .
-    . . .    ->    . O . -- minimax plays 1 -->  . O .
-    . . .          . . .          . . .
-  ply 3  network -> 8   rootValue=-0.203  depth=11
-  visits:  2:0.11  3:0.21  5:0.00  6:0.07  7:0.03  8:0.58
-    X X .
-    . O .
-    . . O
-  ply 4  minimax -> 2   (X X X top row)
-  result: network LOST
+ply 1  network -> 5   visits: 1:0.03 2:0.06 3:0.03 4:0.13 5:0.39 6:0.07 7:0.02 8:0.27
+ply 2  minimax -> 2        (board: X . X / . . O / . . .)
+ply 3  network -> 8   visits: 1:0.04 3:0.08 4:0.15 6:0.09 7:0.19 8:0.45
+ply 4  minimax -> 1        (X X X top row) -- network LOST
 ```
 
-After X plays corner-then-adjacent-edge (0, then 1), X threatens an
-immediate win at square 2. The network's own MCTS visit distribution
-puts only 11% of its visits on the one square that blocks it (2), and
-58% on an unrelated corner (8). `checkpoint_run4.bin` shows the mirror
-image: it loses as X to the same class of missed block (a column threat
-after O plays 0 and 6, needing a block at square 3), with visits
-`1:0.29  3:0.21  5:0.18  7:0.11  8:0.21` — the correct block (3) gets
-only 21% of visits, versus 29% spent on an unrelated corner.
+X has corners 0 and 2 after ply 2, threatening an immediate win at square
+1. The network's own MCTS visit distribution puts only **4%** of its
+visits on the one square that blocks it (1), and **45%** on an unrelated
+corner (8).
 
-In both cases the network is not confidently wrong — it is *unconcentrated*:
-search spreads real probability mass over several non-blocking moves
-instead of collapsing onto the one legal, correct one. That is consistent
-with the project's expected result: part of the simulation budget is
-spent on dynamics-network rollouts into actions the real game would
-never allow, so less budget is left to firmly resolve the one square that
-matters. The AlphaZero sibling project's README describes the identical
-failure shape ("confidently losing every game from one side because
-search never visits the one move that mattered enough") even though its
-search steps real rules — but MuZero's added source of imprecision (the
-learned dynamics, see the `latent_probe` section below) is on top of it,
-and reaching zero losses took AlphaZero 20 iterations against MuZero's
-400+ without doing so.
+**`numSimulations=300`, seed 101 (`draws=0 losses=100`), losing as X, at
+the trained simulation count:**
 
-## Iterations to `losses=0`
+```
+=== network plays X ===
+ply 0  network -> 4
+ply 1  minimax -> 0
+ply 2  network -> 5   visits: 1:0.00 2:0.09 3:0.06 5:0.83 6:0.02 7:0.00 8:0.00
+ply 3  minimax -> 3        (board: O . . / O X X / . . .)
+ply 4  network -> 2   visits: 1:0.00 2:0.47 6:0.41 7:0.02 8:0.10
+ply 5  minimax -> 6        (O X . / O X X / O . .  -- left column) -- network LOST
+```
 
-- **First reached 0** (training-time eval, 20 games/side): iteration 390
-  of run 4 (`numSimulations=100`, `learningRate=0.01`) —
-  `eval vs minimax: wins=0 draws=40 losses=0`. This was transient: the
-  very next training-time eval (iteration 400, the run's last) had
-  regressed to `draws=20 losses=20`, and because checkpoints are
-  overwritten every 10 iterations, the momentary 0-loss network itself
-  was not preserved for separate re-evaluation.
-- **Sustained at 0**: not achieved in any of the five runs within budget.
-  The closest sustained state is `losses=20` (out of 40 training-time
-  eval games), held for the last 100+ iterations of run 2
-  (`numSimulations=100`, default learning rate) — 11 consecutive
-  evaluation checkpoints (iterations 300–400) all read
-  `wins=0 draws=20 losses=20`.
+Same shape: O has 0 and 3 (left column) after ply 3, threatening a win at
+square 6. The network's visits split 47% on square 2 (which blocks
+nothing) versus 41% on square 6 (the actual, only correct block) — close
+enough this time that it reads as genuine indecision rather than the
+lopsided 4%-vs-45% miss on the O side, but the network still plays the
+higher-visit, non-blocking move and loses. Two different configurations
+(100 vs. 300 simulations, two different seeds), and both fail at the
+identical *kind* of ply: an immediate three-in-a-row the network must
+block, with search spread across multiple candidates instead of
+collapsed onto the one legal correct one.
 
-## Comparison with the AlphaZero sibling project
+For contrast, the one converged checkpoint (`numSimulations=100`, seed
+303, probed here at `diag_eval`'s default 150 simulations — the same
+150 that `./build/evaluate` uses regardless of a checkpoint's trained
+simulation count, so this is the same search budget behind its
+`draws=100 losses=0` score above) handles the same class of position
+correctly — at the analogous ply in its own transcript it puts 74–80% of
+its visits on the correct block and plays it:
 
-From `~/projects/alphazero-tictactoe/README.md`: with root Dirichlet
-noise during self-play, a real run reached `draws=40 losses=0` (all 40
-games, both sides) after **20 iterations**.
+```
+=== network plays X (converged checkpoint) ===
+ply 2  network -> 2   visits: 1:0.11  2:0.74  3:0.03  5:0.03  6:0.00  7:0.01  8:0.09
+=== network plays O (converged checkpoint) ===
+ply 3  network -> 2   visits: 2:0.80  3:0.04  5:0.03  6:0.00  7:0.00  8:0.13
+```
+Both of its games (as X and as O) end in `draw`.
 
-MuZero here did not reach that bar within 400–800 iterations. The
-comparison is not apples-to-apples, though, and the gap should not be
-read as a precise multiplier. What differs between one "iteration" in
-each project (read directly from each project's `apps/train.cpp`):
+## The two grids run this pass
 
-| | AlphaZero | MuZero (this project, tuned) |
-|---|---|---|
-| Self-play games/iteration | 25 | 25 |
-| MCTS simulations/move (self-play) | 50, over the **real** rules | 100 (tuned up from 60), over a **learned** dynamics model |
-| Gradient steps/iteration | 20 | 40 |
-| Batch size | 32 | 64 |
-| Samples/iteration (steps × batch) | 640 | 2,560 |
-| Learning rate | 0.01 | 0.02 (0.01 also tried, see below) |
-| Replay buffer capacity | 10,000 positions | 2,000 games |
+Everything held at `gamesPerIteration=25`, `batchSize=64`,
+`trainStepsPerIteration=40`, `learningRate=0.02`, `bufferCapacity=2000`
+games, `unrollSteps=5`, `tdSteps=32`, unless the column says otherwise.
+**Each run's random seed now controls everything** — network weight
+initialization and all self-play/training randomness — via a new
+optional third CLI argument to `apps/train.cpp` (see "Reproducibility"
+below), so every cell below is exactly reproducible.
 
-So each MuZero iteration does 4x the gradient-step throughput of an
-AlphaZero iteration (40×64 vs 20×32), and even so needed 20x+ as many
-iterations to approach (not reach) the same bar — a rough 80x+ more total
-gradient-step-samples processed, for a materially worse final result.
-That gap, not any single number in it, is the finding the spec predicted:
-MuZero pays for not being told the rules, both in wasted search budget
-(the `diag_eval` transcripts above) and in a dynamics model that itself
-drifts from the real game (the `latent_probe` table below). The
-per-iteration figures above should be read as context for that gap, not
-as inputs to a precise "N times slower" claim — the two self-play
-loops, network architectures, and target constructions differ in enough
-other ways (K-step unrolling, a reward head, a representation network)
-that iteration count is not a unit-comparable currency between them.
+### Grid 1 — `temperatureMoves` × `numIterations` (`numSimulations=100` held fixed)
 
-## `latent_probe` table
+| temperatureMoves | iterations | seed 101 | seed 202 | seed 303 | converged / 3 |
+|---|---|---|---|---|---|
+| 2 (baseline) | 400 | `draws=50 losses=50` | `draws=0 losses=100` | `draws=0 losses=100` | 0/3 |
+| 2 (baseline) | 1500 | `draws=0 losses=100` | `draws=0 losses=100` | `draws=0 losses=100` | 0/3 |
+| 6 | 400 | `draws=0 losses=100` | `draws=0 losses=100` | `draws=0 losses=100` | 0/3 |
+| 6 | 1500 | `draws=50 losses=50` | `draws=0 losses=100` | `draws=0 losses=100` | 0/3 |
 
-Run against `checkpoint_run2.bin` (the representative final checkpoint,
-matching the hyperparameters left committed in `apps/train.cpp`), over
-2000 sampled trajectories:
+(Scores are `./build/evaluate <checkpoint> 50` on each cell's final
+checkpoint.) Neither `temperatureMoves` value converged on any seed at
+either iteration count. `temperatureMoves=6, iterations=1500, seed=303`
+is worth a specific mention even though its `evaluate` score is a flat
+`losses=100`: its **training-time** eval line (20 games/side, every 10
+iterations) spent a long stretch — roughly iterations 640–950 — mostly at
+`losses=0` or `losses=20`, closer to sustained convergence than anything
+else in this grid, before drifting back to `losses=40` by iteration 1500.
+That the network can pass through a long near-converged stretch and drift
+back out of it, with no early-stopping or best-checkpoint tracking in
+`apps/train.cpp`, is itself informative: whatever `apps/train.cpp` saves
+as "final" is whatever the last 10-iteration window happened to produce,
+not necessarily the best point the run reached.
+
+The plain reading of Grid 1: at `numSimulations=100`, doubling or
+tripling `temperatureMoves` did not produce a repeatable improvement
+distinguishable from seed noise, at either 400 or 1500 iterations, and
+1500 iterations was not obviously better than 400 — the training loss
+was still falling at the end of every run (never plateaued; see
+per-run loss traces in the raw logs), but the categorical eval score
+did not track it: `temperatureMoves=2, seed=303` was `losses=100` at both
+400 *and* 1500 iterations, unchanged despite 3.75x more training.
+
+### Grid 2 — `numSimulations` × 3 seeds (`temperatureMoves=6`, 800 iterations held fixed)
+
+| numSimulations | seed 101 | seed 202 | seed 303 | converged / 3 |
+|---|---|---|---|---|
+| 100 | `draws=0 losses=100` | `draws=50 losses=50` | **`draws=100 losses=0`** | **1/3** |
+| 300 | `draws=0 losses=100` | `draws=0 losses=100` | `draws=0 losses=100` | 0/3 |
+
+This is the cleanest single result in the whole tuning pass, because it
+is a matched-seed comparison (same three seeds, same everything else):
+**tripling the search budget from 100 to 300 simulations did not help —
+it went 1/3 converged down to 0/3.** This directly contradicts the
+hypothesis that more search budget was the untried lever. The
+search-depth finding above explains why: at 100 simulations the tree
+already reaches depth 15–18 on a 9-ply-max game; giving it 300 does not
+make the *legal* portion of the tree deeper or better-resolved, it mostly
+buys more simulations spent even further past the point of any legal
+game, over a dynamics model whose own drift is unbounded with depth (see
+`latent_probe` below). Search budget was not the untried lever that
+mattered; if anything this grid is evidence the branching-factor argument
+(more sims needed because effective branching never shrinks) is
+outweighed in practice by how unreliable the *deep* part of the tree is
+regardless of budget.
+
+Caveat on the one success: this grid did not include a
+`temperatureMoves=2, numSimulations=100`, seed-303, 800-iteration cell,
+so it is not established whether `temperatureMoves=6` specifically caused
+seed 303 to converge, or whether seed 303 would have converged at
+`temperatureMoves=2` too. That specific ablation — same seed, same
+`numSimulations=100`, same 800 iterations, `temperatureMoves=2` instead
+of 6 — is the single most informative next run to isolate the effect,
+and was not run within this pass's budget.
+
+## Reproducibility added this pass
+
+`apps/train.cpp` previously seeded everything (`MuZeroNetwork`'s initial
+weights, the self-play/training RNG, and — undocumented until this pass —
+`ReplayBuffer`'s internal sampling RNG) from `std::random_device`, making
+every run's outcome unrepeatable. To run the seed grids above honestly,
+three changes were made:
+
+- `apps/train.cpp` takes an optional third argument, seed, defaulting to
+  `std::random_device{}()` when omitted (old behavior preserved). The
+  seed now drives `MuZeroNetwork`'s weight initialization (via its
+  existing `MuZeroNetwork(std::uint32_t seed)` constructor — no change
+  needed there), the self-play/training `std::mt19937`, and the replay
+  buffer's sampling RNG (see next point) — one number reproduces an
+  entire run bit-for-bit, verified by `cmp`-ing two checkpoints trained
+  from the same seed.
+- `include/mz/replay_buffer.hpp` / `src/replay_buffer.cpp`: `ReplayBuffer`
+  had a private `std::mt19937 rng_` seeded from `std::random_device` with
+  no way to control it. Added an optional `seed` constructor parameter
+  (default `std::random_device{}()`, so every other caller and every
+  existing test is unaffected) and threaded it through to the member
+  initializer. This file is not on the forbidden list (`mcts.cpp`,
+  `network.cpp`, `targets.cpp`, `selfplay.cpp`) — it is a data structure,
+  not algorithm code, and no sampling *behavior* changed, only where its
+  RNG's seed comes from.
+
+All 10 existing tests pass unmodified after both changes. This is a
+real, load-bearing methodological gap that was open for the entire task
+until now: every run reported before this pass (runs 1–5, and this
+task's first attempt at a `temperatureMoves` grid before the coordinator
+caught it) used an uncontrolled seed and could not be reproduced or
+matched across configurations.
+
+## `latent_probe`: even the converged checkpoint's model still drifts
+
+Run against the one converged checkpoint (`numSimulations=100`,
+`temperatureMoves=6`, seed 303, 800 iterations), over 2000 trajectories:
 
 ```
   k   samples   mean |value error|   mean policy distance
-  1      2000              0.1948                  0.1820
-  2      1952              0.2314                  0.2601
-  3      1840              0.2864                  0.3286
-  4      1606              0.3161                  0.3847
-  5      1296              0.3541                  0.4412
-  6       847              0.3774                  0.4822
+  1      2000              0.3128                  0.2422
+  2      1952              0.2316                  0.4124
+  3      1840              0.3268                  0.4499
+  4      1606              0.2988                  0.4725
+  5      1296              0.3371                  0.5042
+  6       847              0.3305                  0.5501
 
-Terminal reward prediction: mean |error| = 0.8426 over 1153 transitions
+Terminal reward prediction: mean |error| = 0.7682 over 1153 transitions
 ```
 
-(`checkpoint_run4.bin` shows the same shape: value error 0.29→0.29,
-policy distance 0.20→0.36 from k=1 to k=6, terminal reward error 0.79.)
+The most important reading of this table is the *contrast* with the fact
+that this exact checkpoint plays perfectly against minimax (`diag_eval`
+above, `draws=100 losses=0`). **A converged, perfectly-drawing checkpoint
+still has a dynamics model whose imagined policy disagrees with the real
+game over half the time by depth 6 (0.55 total variation), and whose
+terminal-reward sense is off by 0.77 on rewards in `{-1,0,+1}`.** Model
+fidelity at depth is not what determined whether this run converged —
+what determined it was whether the root-level policy and value were
+correct enough, and whether self-play's exploration (governed largely by
+`temperatureMoves` and pure seed luck) ever produced and reinforced the
+training examples that correct the policy head's blind spots near the
+root. The deep dynamics model can stay wrong; convergence in this project
+is a property of the shallow, frequently-visited part of the tree, not of
+the model as a whole. This reframes the search-depth finding above:
+search wasting budget past depth 9 is wasteful, but it is not obviously
+*harmful* to a converged network the way it might be to an unconverged
+one, because a converged network's root policy is already good enough
+that deep, wrong simulations get outvoted by shallow, right ones. An
+unconverged network has no such shallow anchor, so the same deep noise
+has nothing to be outvoted by.
 
-**Reading the drift**: both error columns climb steadily and roughly
-monotonically as the dynamics network is rolled further from a real
-board — by k=6 the imagined latent disagrees with a fresh representation
-pass on the real board almost half the time in policy terms (0.48 total
-variation, versus 0.18 at k=1). The policy-distance column is the more
-informative one here (as the brief warned): it tracks real drift from
-k=1 onward, while the value-error column starts smaller-but-nonzero and
-grows more slowly in relative terms because the value head is fairly flat
-across boards this early in training, which mutes its apparent error.
-Values in the game are tightly bounded (win/draw/loss), so even a poorly
-differentiated value head cannot be off by much in absolute terms — the
-policy distribution, over 9 possible moves including illegal ones the
-model has never been corrected on, has much more room to diverge, and
-does.
+## Full tuning history (all 23 training runs across this task)
 
-The terminal-reward error (0.84, on rewards that are themselves in
-`{-1, 0, +1}`) is the most damning single number: the dynamics network is
-not reliably predicting when the game has ended or who won when it
-imagines forward. A search that cannot trust its own model's sense of
-"the game is over and X just won" cannot correctly value the branches
-below the point where it stops trusting real transitions — which lines
-up exactly with the diagnosed failure above, where search spreads its
-budget across squares instead of concentrating on the one forced reply.
+**Phase 1 — single seed, uncontrolled (`std::random_device`), 400–800 iterations:**
 
-## Tuning history
+| run | iterations | changed from prior | wall-clock (solo) | outcome (`evaluate ... 50`) |
+|---|---|---|---|---|
+| 1 | 400 | none (`numSimulations=60`, baseline) | 44.4s | `draws=0 losses=100` |
+| 2 | 400 | `numSimulations=100` | 49.3s | `draws=50 losses=50` |
+| 3 | 400 | `numSimulations=160` | 57.7s | `draws=0 losses=100` |
+| 4 | 400 | `numSimulations=100`, `learningRate=0.01` | 49.2s | `draws=50 losses=50` |
+| 5 | 800 | same as run 2, different (uncontrolled) seed | 99.5s | `draws=0 losses=100` |
 
-All runs from a freshly-initialized network, `gamesPerIteration=25`,
-`batchSize=64`, `trainStepsPerIteration=40`, `bufferCapacity=2000` games,
-`evalIntervalIterations=10`, `evalGamesPerSide=20`, `evalSimulations=150`,
-`unrollSteps=5`, `tdSteps=32` (all as committed at the start of this
-task) unless noted. Wall-clock times measured with `time` around
-`./build/train`.
+**Phase 2 — Grid 1, `temperatureMoves` × `numIterations`, 3 controlled seeds each (`numSimulations=100`):**
+See the Grid 1 table above. 0/12 cells converged. Batch wall-clock
+(6-way parallel): ~3.6 min for the `temperatureMoves=2` batch, ~3.8 min
+for the `temperatureMoves=6` batch (contended; not clean per-run
+figures — see solo timings in Phase 1 for the uncontended cost of a
+400-iteration run).
 
-| run | iterations | changed from defaults | wall-clock | training-time eval trend | final `./build/evaluate ... 50` |
-|---|---|---|---|---|---|
-| 1 | 400 | none (baseline: `numSimulations=60`, `learningRate=0.02`) | 44.4s | `losses=40` for all but one blip (draws=20 at iter 320, reverted next eval); ends `losses=40` | `draws=0 losses=100` |
-| 2 | 400 | `numSimulations=100` | 49.3s | `losses=40` until iter ~250, then `draws=20 losses=20` sustained for the last 11 consecutive evals (iters 300–400) | `draws=50 losses=50` |
-| 3 | 400 | `numSimulations=160` | 57.7s | worse than run 2: `losses=40` in 36/40 evals, only 4 partial (`draws=20`) evals, none sustained; ends `losses=40` | `draws=0 losses=100` |
-| 4 | 400 | `numSimulations=100`, `learningRate=0.01` (halved) | 49.2s | noisier than run 2: 31/40 `losses=40`, 8/40 `draws=20`, one single eval at iter 390 hit `draws=40 losses=0`, then regressed to `draws=20 losses=20` by iter 400 | `draws=50 losses=50` |
-| 5 | 800 | same config as run 2 (`numSimulations=100`, default `learningRate=0.02`), different random seed, double the iterations | 99.5s | `losses=40` on **every one of 80 evals**, no improvement at all despite 2x the training of run 2 | `draws=0 losses=100` |
+**Phase 3 — Grid 2, `numSimulations` × 3 controlled seeds (`temperatureMoves=6`, 800 iterations):**
+See the Grid 2 table above. 1/6 cells converged (`numSimulations=100`,
+seed 303). Batch wall-clock (6-way parallel, `numSimulations=100` and
+`=300` launched together): ~3 min for the `numSimulations=100` trio to
+finish, ~4 min total for both trios (the `=300` trio runs roughly 2x
+longer per-iteration than `=100`, consistent with search cost scaling
+with simulation count).
 
-Reading across runs 2 and 5 — identical hyperparameters, only the random
-seed and iteration count differ — is the single most important result of
-this tuning pass: **seed-to-seed variance dominated every hyperparameter
-change we tried.** Bumping `numSimulations` from 60 to 100 (run 1 → run
-2) was the only change that produced a repeatable partial improvement
-(runs 2 and 4 both landed on the identical `draws=50 losses=50` final
-score from different learning rates); pushing it further to 160 (run 3)
-made things worse, not better, matching the brief's caution that more
-search is not simply always better once real signal is scarce. Halving
-the learning rate (run 4) changed *which* iterations looked good but not
-the final outcome. Doubling training length with the same seed-sensitive
-setup (run 5) was actively worse than the shorter run 2, which is the
-clearest evidence that what we're tuning against here is largely noise at
-this iteration budget, not a smooth function of the hyperparameters.
+Total: 23 training runs, 1 convergence (`draws=100 losses=0`), 5 partial
+results (`draws=50 losses=50`: Phase 1 runs 2 and 4; Grid 1's
+`temperatureMoves=2/400/seed101` and `temperatureMoves=6/1500/seed101`;
+Grid 2's `numSimulations=100/seed202`), 17 complete failures
+(`draws=0 losses=100`). Every single one of the 23 runs had `wins=0`.
 
-`trainStepsPerIteration`/`batchSize` (tuning step 3) and `unrollSteps`
-(step 4) were not tried — the training-run budget for this task (3-5
-runs) was spent establishing that `numSimulations` and `learningRate`
-were not the deciding factor, which felt like the more load-bearing
-finding to nail down with the runs available. See "What to try next".
+## Comparison with the AlphaZero sibling project
 
-### `tdSteps` (bootstrapping)
+From `~/projects/alphazero-tictactoe/README.md` and its
+`apps/train.cpp`: with root Dirichlet noise during self-play, a real run
+reached `draws=40 losses=0` (all 40 games, both sides) after **20
+iterations**. MuZero here converged on 1 of 3 seeds after 800 iterations
+at its best-found configuration, and 0 of 3 seeds at every other
+configuration tried, up to 1500 iterations.
 
-Not tried. `tdSteps` was next in the brief's tuning order after
-`unrollSteps`, and the training-run budget was already spent (five runs)
-establishing the seed-variance finding above. This is a real gap in the
-tuning pass, not a decision that bootstrapping wouldn't matter — see
-"What to try next".
+What differs between one "iteration" in each project (read directly from
+each project's `apps/train.cpp`):
 
-## Final hyperparameters
+| | AlphaZero | MuZero (this project, best found) |
+|---|---|---|
+| Self-play games/iteration | 25 | 25 |
+| MCTS simulations/move (self-play) | 50, over the **real** rules | 100, over a **learned** dynamics model |
+| Gradient steps/iteration | 20 | 40 |
+| Batch size | 32 | 64 |
+| Samples/iteration (steps × batch) | 640 | 2,560 |
+| Learning rate | 0.01 | 0.02 |
+| Replay buffer capacity | 10,000 positions | 2,000 games |
 
-Left committed in `apps/train.cpp`:
+Each MuZero iteration does 4x the gradient-step throughput of an
+AlphaZero iteration, and even so, 800 iterations (worth roughly 80x
+AlphaZero's total gradient-step-samples) converged on only one of three
+seeds, where AlphaZero's much smaller compute budget converged reliably
+in 20. The per-iteration figures above are context, not a precise
+multiplier — the two self-play loops, network architectures (a
+representation network and a reward head that AlphaZero has no
+equivalent of), and target constructions (K-step unrolling) differ
+enough that iteration count is not a unit-comparable currency between
+the projects. The comparison that *is* precise: AlphaZero's search never
+leaves the real board, so its greedy self-play tail reliably rediscovers
+any corrective line; MuZero's search increasingly imagines positions the
+real game cannot reach (depth 18 on a 9-ply game), and its greedy
+self-play tail can lock onto a wrong belief indefinitely because it never
+revisits the position that would correct it. That is the cost of not
+being given the rules, and this domain is small enough to make the
+contrast unambiguous even though the exact iteration multiplier is not a
+clean number.
+
+## Final hyperparameters left committed
 
 | parameter | value | changed? | why |
 |---|---|---|---|
-| `numSimulations` (`SelfPlayConfig`) | 100 | yes, from 60 | Run 1 (60, the committed starting point) never posted a single non-`losses=40` training-time eval outside one blip. Run 2 (100) was the first change tried, per the brief's tuning order, and was the only change that produced a repeatable partial result across two independent runs (2 and 4). Run 3 showed 160 is not simply better — see tuning history. |
-| `learningRate` | 0.02 | no (left at the starting-point default) | Run 4 tried halving it to 0.01 and got the same final score (`draws=50 losses=50`) as run 2's unchanged 0.02, just with a noisier path there; run 5 shows the same 0.02 config can also fail completely on a different seed. Since neither value demonstrated a repeatable advantage, the default was kept to minimize the number of simultaneous changes against the committed starting point. |
+| `numSimulations` (`SelfPlayConfig`, in `include/mz/selfplay.hpp`) | 100 | yes, from 60 | Grid 2 is a clean, matched-seed comparison showing 300 converged on 0/3 seeds versus 100's 1/3 — more search budget was not simply better, consistent with the search-depth finding (budget is mostly spent past the point where any legal game could still be running). 100 is an empirical middle ground, not a principled optimum; 160 (Phase 1, single seed) also did no better than 100. |
+| `temperatureMoves` (`SelfPlayConfig`, in `include/mz/selfplay.hpp`) | 6 | yes, from 2 | The only sustained `draws=100 losses=0` result in the entire task used this value. However, Grid 1 (a direct, matched-seed comparison of `temperatureMoves=2` vs. `6` at `numSimulations=100`) found 0/12 cells converged at *either* value, so this parameter's effect is not conclusively established by the evidence collected — see "What to try next" for the specific ablation that would settle it. Kept at 6 on the strength of (a) the one success using it and (b) the mechanistic argument in the header comment (MuZero's greedy self-play tail searches a drifting model and cannot self-correct the way AlphaZero's real-rules tail can), not because Grid 1 proved it. |
+| `learningRate` | 0.02 | no | Phase 1 run 4 tried 0.01 and reached the same final score as run 2's 0.02; no repeatable advantage either way. |
 | `gamesPerIteration` | 25 | no | not tuned this pass |
 | `batchSize` | 64 | no | not tuned this pass |
 | `trainStepsPerIteration` | 40 | no | not tuned this pass |
 | `unrollSteps` (`TargetConfig`) | 5 | no | not tuned this pass |
-| `tdSteps` (`TargetConfig`) | 32 (bootstrap term falls off the end; value target = game outcome) | no | not tuned this pass, see above |
+| `tdSteps` (`TargetConfig`) | 32 (value target = game outcome) | no | not tuned this pass, see below |
 | `bufferCapacity` | 2000 games | no | starting-point default |
 | `evalIntervalIterations` / `evalGamesPerSide` / `evalSimulations` | 10 / 20 / 150 | no | starting-point defaults |
 
-Running `./build/train 400 checkpoint.bin` with the code as committed
-reproduces the setup used for runs 2 and 5 (only the random seed differs
-between invocations, since the network and RNG are seeded from
-`std::random_device` on each run) — meaning a fresh run of the committed
-code has, on this evidence, roughly even odds of landing on run 2's
-partial success or run 5's complete failure.
+A fresh `./build/train 800 checkpoint.bin` with the code as committed has,
+on the Grid 2 evidence, roughly 1-in-3 odds of reproducing seed 303's
+convergence and 2-in-3 odds of a partial or complete failure. Pass a
+third argument (a seed) to reproduce a specific outcome from this
+document exactly, e.g. `./build/train 800 checkpoint.bin 303`.
 
-## Wall-clock time and machine
+### `tdSteps` (bootstrapping) — not tried, and why it is still the top candidate
 
-- Machine: `Apple M4` (`sysctl -n machdep.cpu.brand_string`), 10 cores
-  (`sysctl -n hw.ncpu`).
-- Run times (400 iterations unless noted), single-threaded `train`
-  binary, Release build: 44.4s (run 1) / 49.3s (run 2) / 57.7s (run 3) /
-  49.2s (run 4) / 99.5s (run 5, 800 iterations). All five runs combined:
-  under five minutes of wall-clock time — far under the "tens of
-  minutes" budget anticipated for a single 400-iteration run, since this
-  problem's self-play games are extremely short (at most 9 plies) and
-  the network is small.
+Not tried this pass either (five runs of budget in the first attempt, six
+plus six in the two grids requested by the coordinator — every run slot
+was spoken for by the seed-variance and search-budget questions, which
+were the more urgent open questions). This is a real gap, not a judgment
+that it wouldn't matter. If anything, the value-head/policy-head probe
+finding sharpens the case for trying it: the value head is *already*
+correct (right signs, sensible magnitudes) under the current `tdSteps=32`
+regime, where the value target is just the game outcome — so lowering
+`tdSteps` to turn on real bootstrapping would not be fixing a broken
+value head, it would be asking whether a denser, earlier value signal
+changes what the *policy* head learns to prioritize during training
+(since the policy loss and value loss share the trunk of the network).
+Whether that helps is a real open question, not a predictable win.
 
-## What to try next
+## What to try next, and what to spend the next hour on
 
-In priority order, given what runs 1–5 actually showed:
+In order of how directly each follows from what was actually measured
+this pass:
 
-1. **`tdSteps`.** Untried this pass, and explicitly called out in the
-   brief as worth a paragraph either way. Turning on real bootstrapping
-   (e.g. `tdSteps=5`) changes what the value target rewards early in a
-   game, before the outcome is known, which is exactly where our
-   `diag_eval` transcripts show search failing to commit to forced
-   moves — a better early-game value signal seems more likely to fix a
-   4-ply tactical blind spot than a search-budget or learning-rate change
-   did.
-2. **Averaging over seeds rather than over hyperparameters.** Given how
-   large the run-to-run variance was at fixed hyperparameters (run 2 vs.
-   run 5), the next tuning pass should hold a hyperparameter fixed and
-   run 3+ seeds before concluding anything about it, rather than treating
-   a single run's outcome as attributable to the change under test — this
-   pass's run 3 (`numSimulations=160`, one seed) may simply have drawn an
-   unlucky seed rather than genuinely being worse than 100.
-3. **`trainStepsPerIteration`/`batchSize`** (brief's tuning step 3,
-   untried): more gradient steps per unit of self-play, to see whether
-   the network is under-trained relative to the data it already collects
-   rather than under-explored.
-4. Longer runs with root-Dirichlet-noise diagnostics: confirm whether the
-   specific missed-block pattern in `diag_eval` recurs at higher
-   iteration counts, or whether it is a different specific line each
-   time (which would point toward search-budget rather than a
-   consistently mis-learned policy region).
+1. **The `temperatureMoves=2` vs. `6` ablation at seed 303, `numSimulations=100`, 800 iterations.**
+   This is the single most informative next run and was identified above
+   as the missing cell. It directly answers whether `temperatureMoves=6`
+   is doing real work or whether seed 303 was simply a lucky seed
+   regardless of it — a question this document currently cannot answer
+   and should not paper over.
+2. **More `gamesPerIteration`.** The diagnosed failure is a single rare
+   tactical pattern (a two-in-a-row that must be blocked, arising a
+   specific number of plies into a specific opening) that the policy head
+   does not reliably learn. If self-play only occasionally produces the
+   position, the training buffer only occasionally contains a corrective
+   example for it, and a config-and-seed-dependent coin flip on whether
+   that example appears (and appears often enough to be sampled and
+   trained on before the buffer rolls it out) is a plausible mechanism for
+   the seed variance observed throughout every grid in this document. More
+   games per iteration increases the odds that the position is generated
+   and retained, independent of `temperatureMoves`.
+3. **`tdSteps` lowered (e.g. to 5).** Discussed above; genuinely open,
+   and specifically interacts with the shared trunk between the value and
+   policy heads in a way the current evidence cannot predict.
+4. **More `trainStepsPerIteration` or a larger hidden width.** The
+   policy head's failure could be a capacity or fitting problem rather
+   than (or in addition to) a data problem — worth ruling in or out once
+   the data-side candidates (2) are tried, since more gradient steps on
+   data that never contains the corrective example won't help, but more
+   steps on data that does contain it (rarely) might make better use of
+   the rare signal.
+
+If forced to spend the next hour on exactly one: **(2), more
+`gamesPerIteration`.** It is the cheapest to test (no algorithm or
+architecture change, one number in `apps/train.cpp`), it is directly
+motivated by the localized failure (a rare position under-represented in
+training data) rather than by a mechanism this pass already tested and
+found wanting (search budget), and unlike (1) it does not merely explain
+the existing evidence — it is a real, independent lever that either
+raises every seed's hit rate or it does not.
 
 ## Global constraints observed
 
 No changes were made to `src/mcts.cpp`, `src/network.cpp`,
-`src/targets.cpp`, or `src/selfplay.cpp`. Legality was never masked below
-the search root at any point in this tuning pass — search below the root
-in every run above was free to (and did) wander into illegal branches,
-per the project's design.
+`src/targets.cpp`, or `src/selfplay.cpp`. `include/mz/replay_buffer.hpp`
+and `src/replay_buffer.cpp` were changed only to add an optional,
+default-preserving seed parameter for reproducibility — no sampling
+*behavior* changed for any existing caller. `include/mz/selfplay.hpp`'s
+`SelfPlayConfig` defaults were changed (`numSimulations`,
+`temperatureMoves`), as explicitly permitted, with the rationale recorded
+both here and as comments at the point of definition. Legality was never
+masked below the search root at any point, in any of the 23 runs — search
+below the root was free to (and did, extensively — see the depth-18
+finding) wander into branches the real game does not allow. The
+evaluation harness (`evaluateAgainstMinimax`, `evalGamesPerSide=50`) was
+never weakened.

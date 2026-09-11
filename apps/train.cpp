@@ -11,6 +11,10 @@
 int main(int argc, char** argv) {
     int numIterations = argc >= 2 ? std::atoi(argv[1]) : 400;
     std::string checkpointPath = argc >= 3 ? argv[2] : "checkpoint.bin";
+    // Optional: pin the seed for reproducible runs (e.g. a seed sweep).
+    // Defaults to a random seed, as before, when not given.
+    unsigned int seed = argc >= 4 ? static_cast<unsigned int>(std::strtoul(argv[3], nullptr, 10))
+                                  : std::random_device{}();
 
     // Starting point. Task 11 tunes these against measured convergence.
     const int gamesPerIteration = 25;
@@ -22,12 +26,14 @@ int main(int argc, char** argv) {
     const int evalGamesPerSide = 20;
     const int evalSimulations = 150;
 
-    mz::MuZeroNetwork network;
-    mz::ReplayBuffer buffer(bufferCapacity);
+    // Same seed drives both the network's initial weights and self-play/
+    // training randomness, so a run is fully reproducible from one number.
+    mz::MuZeroNetwork network(seed);
+    mz::ReplayBuffer buffer(bufferCapacity, seed);
     mz::SelfPlayConfig selfPlayConfig;
-    selfPlayConfig.numSimulations = 100;  // Task 11 tuning: see docs/results.md.
     mz::TargetConfig targetConfig;
-    std::mt19937 rng(std::random_device{}());
+    std::mt19937 rng(seed);
+    std::printf("seed=%u\n", seed);
 
     for (int iteration = 0; iteration < numIterations; ++iteration) {
         for (int g = 0; g < gamesPerIteration; ++g) {
