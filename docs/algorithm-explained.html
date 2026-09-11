@@ -163,7 +163,12 @@
     border-left:1px solid var(--rule);
   }
   nav.toc a{
-    display:block;
+    /* flex, not block, so a title that wraps aligns its second line with
+       its first rather than sliding back under the section number. The
+       number is one flex item and the title text is an anonymous one, so
+       each gets its own column. */
+    display:flex;
+    align-items:baseline;
     padding:6px 0 6px 14px;
     color:var(--ink-dim);
     text-decoration:none;
@@ -171,7 +176,7 @@
     margin-left:-1px;
   }
   nav.toc a:hover{ color:var(--ink); border-left-color:var(--rule-strong); }
-  nav.toc .n{ color:var(--ink-faint); margin-right:8px; }
+  nav.toc .n{ color:var(--ink-faint); margin-right:8px; flex:none; }
 
   /* ---------- article ---------- */
   main{ min-width:0; }
