@@ -172,49 +172,64 @@ Here are the two entry points. `initialInference` is `h` then `f`:
 
 ```cpp
 MuZeroNetwork::InitialInference MuZeroNetwork::initialInference(
-    const std::array<float, kObservationSize>& observation) const {
-    HiddenTrace hidden = representationHidden(observation);
-    std::vector<float> latent = minMaxNormalize(hFc2_.forward(hidden.activation));
+    const std::array<float, kObservationSize>& observation, Workspace& ws) const {
+    ws.observation.assign(observation.begin(), observation.end());
+    hFc1_.forwardInto(ws.observation, ws.trunkPre);
+    reluInto(ws.trunkPre, ws.trunk);
+    hFc2_.forwardInto(ws.trunk, ws.latentPre);
 
-    HiddenTrace predictionTrace = predictionHidden(latent);
     InitialInference out;
-    out.latent = std::move(latent);
-    out.policy = softmax9(fPolicy_.forward(predictionTrace.activation));
-    out.value = std::tanh(fValue_.forward(predictionTrace.activation)[0]);
+    // The latent is real output, not scratch -- the caller keeps it.
+    minMaxNormalizeInto(ws.latentPre, out.latent);
+
+    fFc1_.forwardInto(out.latent, ws.predPre);
+    reluInto(ws.predPre, ws.pred);
+    fPolicy_.forwardInto(ws.pred, ws.logits);
+    out.policy = softmax9(ws.logits);
+    fValue_.forwardInto(ws.pred, ws.scalar);
+    out.value = std::tanh(ws.scalar[0]);
     return out;
 }
 ```
-*src/network.cpp:65 — `MuZeroNetwork::initialInference`*
+*src/network.cpp:82 — `MuZeroNetwork::initialInference`*
+
+(There is also a one-argument overload, `initialInference(observation)`, a thin wrapper that builds a
+throwaway `Workspace` and forwards to this one — for callers, like the tests, that do not care about
+reuse. The workspace is discussed below.)
 
 And `recurrentInference` is `g` then `f` — the one that runs everywhere
 else, and which never sees an observation at all:
 
 ```cpp
 MuZeroNetwork::RecurrentInference MuZeroNetwork::recurrentInference(const std::vector<float>& latent,
-                                                                    int action) const {
-    std::vector<float> input = makeDynamicsInput(latent, action);
-    HiddenTrace hidden = dynamicsHidden(input);
+                                                                    int action, Workspace& ws) const {
+    fillDynamicsInput(latent, action, ws.dynamicsInput);
+    gFc1_.forwardInto(ws.dynamicsInput, ws.trunkPre);
+    reluInto(ws.trunkPre, ws.trunk);
+    gFc2_.forwardInto(ws.trunk, ws.latentPre);
 
-    std::vector<float> nextLatent = minMaxNormalize(gFc2_.forward(hidden.activation));
-    float reward = std::tanh(gReward_.forward(hidden.activation)[0]);
-
-    HiddenTrace predictionTrace = predictionHidden(nextLatent);
     RecurrentInference out;
-    out.latent = std::move(nextLatent);
-    out.reward = reward;
-    out.policy = softmax9(fPolicy_.forward(predictionTrace.activation));
-    out.value = std::tanh(fValue_.forward(predictionTrace.activation)[0]);
+    minMaxNormalizeInto(ws.latentPre, out.latent);
+    gReward_.forwardInto(ws.trunk, ws.scalar);
+    out.reward = std::tanh(ws.scalar[0]);
+
+    fFc1_.forwardInto(out.latent, ws.predPre);
+    reluInto(ws.predPre, ws.pred);
+    fPolicy_.forwardInto(ws.pred, ws.logits);
+    out.policy = softmax9(ws.logits);
+    fValue_.forwardInto(ws.pred, ws.scalar);
+    out.value = std::tanh(ws.scalar[0]);
     return out;
 }
 ```
-*src/network.cpp:78 — `MuZeroNetwork::recurrentInference`*
+*src/network.cpp:108 — `MuZeroNetwork::recurrentInference`*
 
-Notice that `f` — `predictionHidden`, `fPolicy_`, `fValue_` — is called
-identically in both. One prediction network, shared between "a real
-position I just looked at" and "a position I imagined four plies deep."
-That sharing is what forces the latents produced by `g` to live in the same
-space as the latents produced by `h`: they both have to be readable by the
-same `f`.
+Notice that `f` — `fFc1_`, `reluInto`, `fPolicy_`, `fValue_` — runs
+identically in both, into the same `ws.predPre`/`ws.pred` scratch. One
+prediction network, shared between "a real position I just looked at" and
+"a position I imagined four plies deep." That sharing is what forces the
+latents produced by `g` to live in the same space as the latents produced
+by `h`: they both have to be readable by the same `f`.
 
 > **vs AlphaZero.** AlphaZero has one network and one function signature:
 > board in, (policy, value) out. Everything about the transition between
@@ -277,19 +292,21 @@ is a recurrence, and recurrences are where magnitudes go to explode. MuZero
 own elements, immediately on production:
 
 ```cpp
-std::vector<float> minMaxNormalize(const std::vector<float>& z) {
+void minMaxNormalizeInto(const std::vector<float>& z, std::vector<float>& out) {
     assert(!z.empty());
     float lo = *std::min_element(z.begin(), z.end());
     float hi = *std::max_element(z.begin(), z.end());
     float denom = std::max(hi - lo, kMinMaxFloor);
-    std::vector<float> out(z.size());
+    out.resize(z.size());
     for (size_t i = 0; i < z.size(); ++i) out[i] = (z[i] - lo) / denom;
-    return out;
 }
 ```
-*src/mlp.cpp:163 — `minMaxNormalize`*
+*src/mlp.cpp:154 — `minMaxNormalizeInto`*
 
-Both `h` (line 68 of `src/network.cpp`) and `g` (line 83) push their output
+(`minMaxNormalize`, the allocating form used by the tests and by the
+single-argument inference overloads, is a two-line wrapper around this.)
+
+Both `h` (line 91 of `src/network.cpp`) and `g` (line 116) push their output
 through it, so *every* latent in the system, no matter how it was produced
 or how deep, has minimum exactly 0 and maximum exactly 1. The `kMinMaxFloor`
 of `1e-5` is there for the degenerate case where every element is equal —
@@ -343,9 +360,10 @@ MCTSResult MCTS::run(const Board& board, float temperature) {
     assert(!board.isTerminal());
     const std::vector<int> legalActions = board.legalMoves();
 
-    Node root;
-    MuZeroNetwork::InitialInference initial = network_.initialInference(board.encode());
-    root.latent = initial.latent;
+    nodeCount_ = 0;
+    const int rootIndex = acquireNode();
+    MuZeroNetwork::InitialInference initial = network_.initialInference(board.encode(), workspace_);
+    nodes_[rootIndex].latent = initial.latent;
 
     // The one and only place legality enters the search.
     std::array<float, 9> rootPriors = maskAndRenormalize(initial.policy, legalActions);
@@ -354,10 +372,11 @@ MCTSResult MCTS::run(const Board& board, float temperature) {
                           config_.dirichletEpsilon);
     }
     for (int a : legalActions) {
-        root.children[a] = std::make_unique<Node>();
-        root.children[a]->prior = rootPriors[a];
+        int child = acquireNode();
+        nodes_[child].prior = rootPriors[a];
+        nodes_[rootIndex].children[a] = child;
     }
-    root.expanded = true;
+    nodes_[rootIndex].expanded = true;
 ```
 *src/mcts.cpp:136 — `MCTS::run` (root setup)*
 
@@ -365,28 +384,40 @@ Two real-world facts are consumed here and nowhere else: the encoded
 observation, and `legalMoves()`. The root gets children only for legal
 actions. Everything below is latents.
 
+Nodes here are not individually allocated. `nodes_` is an arena — a
+`std::vector<Node>` reused across searches — and a child is addressed by
+its integer index into it rather than owned through a pointer. `acquireNode`
+hands back a reset slot, growing the arena only the first time a search
+needs more of it than the last one did; in steady state a search touches
+the allocator zero times. `workspace_` is the same `MuZeroNetwork::Workspace`
+from section 01, held once per `MCTS` and passed into every inference this
+search makes.
+
 Expansion below the root is where the difference becomes visible:
 
 ```cpp
-        Node* parent = path[path.size() - 2];
+        const int parentIndex = path_[path_.size() - 2];
         MuZeroNetwork::RecurrentInference step =
-            network_.recurrentInference(parent->latent, lastAction);
+            network_.recurrentInference(nodes_[parentIndex].latent, lastAction, workspace_);
 
-        node->latent = std::move(step.latent);
-        node->stats.reward = step.reward;
+        nodes_[nodeIndex].latent = std::move(step.latent);
+        nodes_[nodeIndex].stats.reward = step.reward;
         // Below the root, every one of the nine actions gets a child.
         // There is no legality oracle here and no terminal detection: the
         // search does not know the rules, and has to learn from the value
         // and reward heads that some of these branches are worthless.
         for (int a = 0; a < 9; ++a) {
-            node->children[a] = std::make_unique<Node>();
-            node->children[a]->prior = step.policy[a];
+            int child = acquireNode();
+            nodes_[child].prior = step.policy[a];
+            // Re-index: acquireNode may have grown the arena, so this must
+            // not be hoisted into a Node& held across the loop.
+            nodes_[nodeIndex].children[a] = child;
         }
-        node->expanded = true;
+        nodes_[nodeIndex].expanded = true;
         ++nodesExpanded;
-        maxDepth = std::max(maxDepth, static_cast<int>(path.size()) - 1);
+        maxDepth = std::max(maxDepth, static_cast<int>(path_.size()) - 1);
 ```
-*src/mcts.cpp:154 — `MCTS::run` (expansion)*
+*src/mcts.cpp:174 — `MCTS::run` (expansion)*
 
 `for (int a = 0; a < 9; ++a)`. Not `for (int a : legalActions)`. Every node
 below the root gets all nine children, including the ones that would put a
@@ -489,8 +520,8 @@ then selection:
 
 ```cpp
     for (int a = 0; a < 9; ++a) {
-        const Node* child = parent.children[a].get();
-        if (!child) continue;   // only happens at the root, for illegal moves
+        if (parent.children[a] < 0) continue;   // root only, for illegal moves
+        const Node* child = &nodes_[parent.children[a]];
         // An unvisited child scores 0 on the Q side, matching MuZero's
         // pseudocode: after normalization that is "as bad as the worst
         // thing seen so far", so exploration has to come from the prior.
@@ -505,7 +536,11 @@ then selection:
         }
     }
 ```
-*src/mcts.cpp:99 — `MCTS::selectChild`*
+*src/mcts.cpp:116 — `MCTS::selectChild`*
+
+`parent.children[a]` is an arena index now, not a `unique_ptr<Node>`; `-1`
+plays the role `nullptr` used to, and `&nodes_[...]` takes a pointer into
+the arena for the rest of the function's read-only use.
 
 The two formulas, side by side:
 
@@ -857,19 +892,24 @@ observation
 
 ```cpp
         for (int k = 0; k < K; ++k) {
-            dynamicsInput[k] = makeDynamicsInput(latent[k], sample.actions[k]);
-            dynamicsTrace[k] = dynamicsHidden(dynamicsInput[k]);
-            latentPre[k + 1] = gFc2_.forward(dynamicsTrace[k].activation);
-            latent[k + 1] = minMaxNormalize(latentPre[k + 1]);
-            reward[k + 1] = std::tanh(gReward_.forward(dynamicsTrace[k].activation)[0]);
+            fillDynamicsInput(ws.latent[k], sample.actions[k], ws.dynamicsInput[k]);
+            gFc1_.forwardInto(ws.dynamicsInput[k], ws.dynamicsPre[k]);
+            reluInto(ws.dynamicsPre[k], ws.dynamicsAct[k]);
+            gFc2_.forwardInto(ws.dynamicsAct[k], ws.latentPre[k + 1]);
+            minMaxNormalizeInto(ws.latentPre[k + 1], ws.latent[k + 1]);
+            gReward_.forwardInto(ws.dynamicsAct[k], ws.scalarGrad);
+            ws.reward[k + 1] = std::tanh(ws.scalarGrad[0]);
         }
 ```
 *src/network.cpp:238 — `MuZeroNetwork::trainStep` (forward unroll)*
 
-Every intermediate is kept — `latentPre` as well as `latent`, the
+Every intermediate is kept — `ws.latentPre` as well as `ws.latent`, the
 pre-activations as well as the activations — because the backward pass
-needs each of them again. This is **backpropagation through time**: the same
-three networks appear many times in one computation graph, and their
+needs each of them again. `ws` here is a `TrainScratch`, `trainStep`'s own
+reusable buffer (below); unrolling one sample used to allocate on the order
+of sixty vectors, and settling their sizes once, on the first sample, is
+what removed that traffic. This is **backpropagation through time**: the
+same three networks appear many times in one computation graph, and their
 gradients are the *sum* over every appearance.
 
 Two properties of `Dense` exist solely for this, and are documented as
@@ -885,32 +925,29 @@ load-bearing in `include/mz/mlp.hpp:13`:
 The reverse pass is one loop from `k = K` down to `0`:
 
 ```cpp
-        std::vector<std::vector<float>> dLatent(K + 1, std::vector<float>(kLatentSize, 0.0f));
+        for (int k = 0; k <= K; ++k) ws.dLatent[k].assign(kLatentSize, 0.0f);
 
         for (int k = K; k >= 0; --k) {
             float scale = lossScale(k);
 
             // prediction head at step k
-            float dValuePre = scale * 2.0f * (value[k] - sample.targetValues[k]) *
-                              (1.0f - value[k] * value[k]);
-            std::vector<float> dPolicyLogits(kActionSize);
+            ws.scalarGrad.assign(1, scale * 2.0f * (ws.value[k] - sample.targetValues[k]) *
+                                        (1.0f - ws.value[k] * ws.value[k]));
+            ws.dPolicyLogits.resize(kActionSize);
             for (int a = 0; a < kActionSize; ++a) {
                 // d(cross-entropy o softmax)/d(logit) = p - target
-                dPolicyLogits[a] = scale * (policy[k][a] - sample.targetPolicies[k][a]);
+                ws.dPolicyLogits[a] = scale * (ws.policy[k][a] - sample.targetPolicies[k][a]);
             }
 
-            std::vector<float> dPredictionHidden =
-                fValue_.backward(predictionTrace[k].activation, {dValuePre});
-            std::vector<float> dFromPolicy =
-                fPolicy_.backward(predictionTrace[k].activation, dPolicyLogits);
-            for (int i = 0; i < kHiddenSize; ++i) dPredictionHidden[i] += dFromPolicy[i];
+            fValue_.backwardInto(ws.predictionAct[k], ws.scalarGrad, ws.dPredictionHidden);
+            fPolicy_.backwardInto(ws.predictionAct[k], ws.dPolicyLogits, ws.dFromPolicy);
+            for (int i = 0; i < kHiddenSize; ++i) ws.dPredictionHidden[i] += ws.dFromPolicy[i];
 
-            std::vector<float> dPredictionPre =
-                reluBackward(predictionTrace[k].preActivation, dPredictionHidden);
-            std::vector<float> dFromPrediction = fFc1_.backward(latent[k], dPredictionPre);
-            for (int i = 0; i < kLatentSize; ++i) dLatent[k][i] += dFromPrediction[i];
+            reluBackwardInto(ws.predictionPre[k], ws.dPredictionHidden, ws.dPredictionPre);
+            fFc1_.backwardInto(ws.latent[k], ws.dPredictionPre, ws.dFromPrediction);
+            for (int i = 0; i < kLatentSize; ++i) ws.dLatent[k][i] += ws.dFromPrediction[i];
 ```
-*src/network.cpp:235 — `MuZeroNetwork::trainStep` (reverse pass, prediction head)*
+*src/network.cpp:280 — `MuZeroNetwork::trainStep` (reverse pass, prediction head)*
 
 `dLatent[k]` accumulates from two sources: the prediction head at step `k`,
 and the dynamics step `k → k+1`. Going strictly downward guarantees the
@@ -935,23 +972,17 @@ depend on the unroll depth.
 ### Scaling rule two: the half gradient
 
 ```cpp
-                std::vector<float> dDynamicsPre =
-                    reluBackward(dynamicsTrace[k - 1].preActivation, dDynamicsHidden);
-                std::vector<float> dDynamicsInput =
-                    gFc1_.backward(dynamicsInput[k - 1], dDynamicsPre);
+                reluBackwardInto(ws.dynamicsPre[k - 1], ws.dDynamicsHidden, ws.dDynamicsPre);
+                gFc1_.backwardInto(ws.dynamicsInput[k - 1], ws.dDynamicsPre, ws.dDynamicsInput);
 
                 // The half gradient. Scaling what flows back into the
-                // dynamics input by 0.5 at every step keeps gradient
-                // magnitude from compounding across the recurrence. One
-                // line, easy to omit, and omitting it destabilizes latents
-                // as the unroll deepens. Always 0.5 in training; a
-                // gradient check sets it to 1 to recover the true
-                // gradient. See MuZeroNetwork::setDynamicsGradientScale.
+                // dynamics input keeps gradient magnitude from compounding
+                // across the recurrence. See setDynamicsGradientScale.
                 for (int i = 0; i < kLatentSize; ++i) {
-                    dLatent[k - 1][i] += dynamicsGradientScale_ * dDynamicsInput[i];
+                    ws.dLatent[k - 1][i] += dynamicsGradientScale_ * ws.dDynamicsInput[i];
                 }
 ```
-*src/network.cpp:272 — `MuZeroNetwork::trainStep` (the half gradient)*
+*src/network.cpp:312 — `MuZeroNetwork::trainStep` (the half gradient)*
 
 Gradient flowing back through the recurrence is halved at every step. By
 the time signal from step 5 reaches step 0 it has been multiplied by
@@ -1189,6 +1220,55 @@ iterations. It is reliability.
 > reported run, not a seed grid — so treat both as context rather than a
 > multiplier. The comparison that *is* precise is in the next section.
 
+### A performance pass, and how it was checked
+
+None of the above is what a profiler of this training loop would have led
+with. A run of 200 iterations put roughly a quarter of wall-clock time
+inside the allocator — `malloc`/`free`, not arithmetic — and four changes
+went after it: `Dense::forwardInto`/`backwardInto` and the activation
+helpers write into caller-owned buffers instead of returning a fresh
+`std::vector` each call; `trainStep` reuses one scratch struct instead of
+allocating on the order of sixty vectors per sample; MCTS nodes moved from
+individually-`unique_ptr`-owned children into an arena addressed by integer
+index, reused across searches, with one `MCTS` object per game instead of
+per move; and `Board` maintains its outcome incrementally — rechecking only
+the (at most four) lines through the square just played — while minimax
+iterates squares directly instead of calling `legalMoves()` at every node
+of the game tree, the single biggest win of the four. The buffers in the
+new `MuZeroNetwork::Workspace` belong to the *caller* (`MCTS` holds one,
+`trainStep` holds another) rather than to the network itself, deliberately,
+so that inference stays safe to call concurrently on a shared network —
+which is what parallel self-play would need. 200 iterations went from
+24.45s to about 15.7s, and the allocator's share of profiled samples went
+from 23.9% to 0.8%.
+
+None of that is a claim to take on faith, and it would be a strange place
+for a project this insistent on provenance to start. Every one of the four
+changes was checked the same way: run training from a fixed seed before the
+change and after it, and compare the resulting checkpoints byte-for-byte.
+Training here is fully reproducible from a seed — the same number drives
+network initialization, self-play, and every sampling decision — so if a
+change to *how* a quantity is stored altered *what* it computes by so much
+as one bit, the checkpoints would stop matching. They did not: two seeds
+(777 and 4242) produced identical checkpoints through the whole pipeline
+after each of the four changes, which is exactly the property this document
+leans on everywhere else — that a run is a fact about a seed, not a fact
+about that particular execution.
+
+Two seeds is a spot check, though, not a proof, and the one bug this pass
+actually introduced was in exactly the part a spot check cannot reliably
+see. `Board`'s incremental outcome tracking works from a hand-written table
+of which lines pass through which square (`kLinesThrough` in
+`src/board.cpp`); a wrong entry in it is invisible until some specific game
+reaches the one position it misjudges, and one slipped in while the table
+was being written. What caught it was not the checkpoint comparison but
+`test_cached_outcome_matches_a_full_rescan_everywhere`, which does not spot
+check: it walks all 549946 nodes of the full tic-tac-toe game tree and
+asserts, at every single one, that the incrementally maintained outcome
+agrees with a full eight-line rescan. Two forms of the same idea — trust
+nothing that was not checked against an independent computation of the same
+answer — at two different scales.
+
 ---
 
 ## 10 — What this bought, and what it cost
@@ -1318,24 +1398,24 @@ for whichever fundamental you want to see again in situ.
 | Markov decision process (state / action / reward) | `mz::Board`, `mz::Cell`, `mz::Outcome` — `include/mz/board.hpp` | same, `az::Board` |
 | State canonicalization | Player-relative `encode()`, used only at the search root — `src/board.cpp` | Player-relative `encode()`, used at every node — `src/board.cpp:68` |
 | Model-based RL with a **given** model | — (deliberately absent) | `Board::applyMove` inside search — `src/mcts.cpp:83` |
-| Model-based RL with a **learned** model | `MuZeroNetwork::recurrentInference` — `src/network.cpp:78` | — (structurally impossible) |
+| Model-based RL with a **learned** model | `MuZeroNetwork::recurrentInference` — `src/network.cpp:102` | — (structurally impossible) |
 | Latent state, no decoder | `kLatentSize = 32`, class comment — `include/mz/network.hpp:17` | — |
 | Policy π(a\|s) and value V(s) approximation | The prediction network `f` — `src/network.cpp:58` | `Network::predict` — `src/network.cpp:23` |
-| Action encoding | One-hot concatenation — `src/network.cpp:31` | — (an action is a board index) |
-| Recurrence stabilization | `minMaxNormalize` — `src/mlp.cpp:127` | — |
-| Planning / lookahead | `MCTS::run` — `src/mcts.cpp:119` | `MCTS::simulate`, `MCTS::run` — `src/mcts.cpp:73, 92` |
-| Root-only legality | `maskAndRenormalize` at the root only — `src/mcts.cpp:62`, `src/mcts.cpp:128` | Legality at every node |
+| Action encoding | One-hot concatenation — `src/network.cpp:42` | — (an action is a board index) |
+| Recurrence stabilization | `minMaxNormalizeInto` — `src/mlp.cpp:154` | — |
+| Planning / lookahead | `MCTS::run` — `src/mcts.cpp:136` | `MCTS::simulate`, `MCTS::run` — `src/mcts.cpp:73, 92` |
+| Root-only legality | `maskAndRenormalize` at the root only — `src/mcts.cpp:78`, `src/mcts.cpp:146` | Legality at every node |
 | Exploration vs. exploitation (search-time) | `explorationTerm` + `MinMaxStats` — `src/mcts.cpp:32`, `src/mcts.cpp:19` | Fixed `c_puct` PUCT — `src/mcts.cpp:50` |
 | Value normalization in search | `MinMaxStats` — `src/mcts.cpp:9` | — (Q is already in `[-1, 1]`) |
 | Guaranteed exploration / Dirichlet root noise | `MCTS::mixDirichletNoise`, self-play only — `src/mcts.cpp:78`, `src/selfplay.cpp:11` | `MCTS::mixDirichletNoise` — `src/mcts.cpp:13` |
 | Exploration vs. exploitation (trajectory-time) | `SelfPlayConfig::temperatureMoves` — `include/mz/selfplay.hpp:33` | `SelfPlayConfig::temperatureMoves` |
 | Credit assignment with intermediate rewards | `backupPath` — `src/mcts.cpp:37` | Sign-flip only, no reward — `src/mcts.cpp:86` |
-| Reward as distinct from value | The dynamics reward head — `src/network.cpp:84`, `src/selfplay.cpp:36` | — (`Board::outcome()`) |
+| Reward as distinct from value | The dynamics reward head — `src/network.cpp:117`, `src/selfplay.cpp:40` | — (`Board::outcome()`) |
 | Monte Carlo return | `tdSteps = 32` collapsing the target to the outcome — `include/mz/targets.hpp:16` | The `z` label — `src/selfplay.cpp:31` |
 | Bootstrapping / TD learning | `bootstrappedValue` — `src/targets.cpp:18` | — |
 | Policy improvement operator | Root visit distribution as the policy target — `src/selfplay.cpp:26` | Same — `src/selfplay.cpp:26` |
-| Backpropagation through time | `MuZeroNetwork::trainStep` — `src/network.cpp:160` | — (one position, one backward pass) |
-| Gradient-scaling rules | `1/K` — `src/network.cpp:176`; half gradient — `src/network.cpp:272` | — |
+| Backpropagation through time | `MuZeroNetwork::trainStep` — `src/network.cpp:194` | — (one position, one backward pass) |
+| Gradient-scaling rules | `1/K` — `src/network.cpp:211`; half gradient — `src/network.cpp:312` | — |
 | Gradient verification | Per-parameter finite difference across all eight layers — `tests/test_network.cpp:296` | Per-weight gradient check — `tests/test_network.cpp` |
 | Trajectory storage | `GameHistory`, `ReplayBuffer` over whole games — `include/mz/game_history.hpp`, `include/mz/replay_buffer.hpp` | Flat `TrainingExample` positions |
 | Reanalyze hook (unused) | `ReplayBuffer::replaceSearchTargets` — `include/mz/replay_buffer.hpp:44` | — (structurally impossible) |

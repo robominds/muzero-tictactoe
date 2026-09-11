@@ -45,10 +45,22 @@ Five executables are produced in `build/`: three programs and two
 diagnostic tools.
 
 ```sh
-# Train from scratch. Periodically prints self-play/training progress and
-# evaluates against a perfect minimax player; saves a checkpoint at the end.
-./train [iterations] [checkpoint-path] [seed]
-# defaults: 400 iterations, checkpoint.bin, a random seed
+# Train from scratch (or resume). Periodically prints self-play/training
+# progress and evaluates against a perfect minimax player; saves a
+# checkpoint at the end.
+./train [iterations] [checkpoint-path] [seed] [resume-from]
+# defaults: 400 iterations, checkpoint.bin, a random seed, fresh weights
+#
+# resume-from, if given, is an existing checkpoint to load weights from
+# instead of starting from a fresh random init. It is weights only --
+# trajectories are never checkpointed, so a resumed run starts with an
+# empty replay buffer and spends its first iterations refilling it before
+# training looks like it did before the interruption. The seed still fully
+# determines everything from that point on, so resuming twice from the same
+# checkpoint with the same seed reproduces the same run -- but a resumed
+# run is NOT identical to an uninterrupted one of the same total length. A
+# missing or corrupt checkpoint fails fast with an error rather than
+# silently training from noise.
 
 # Score a saved checkpoint against perfect minimax play (as both X and O).
 ./evaluate <checkpoint-path> [games-per-side]
@@ -154,8 +166,10 @@ include/mz/   public headers for each component
 src/          implementations (board, minimax, network, mcts, targets,
               replay buffer, self-play, minimax-eval helper)
 apps/         the three executables (train, evaluate, play_cli)
-tools/        diag_eval and latent_probe (diagnostics), render_doc.py (the
-              hand-run, offline markdown-to-HTML converter for docs/)
+tools/        diag_eval and latent_probe (diagnostics); render_doc.py (the
+              hand-run, offline markdown-to-HTML converter for docs/); and
+              check_citations.py (verifies the file:line citations in
+              docs/algorithm-explained.md against the actual source)
 tests/        assert-based test executables (one per component) plus
               tests/integration_smoke.sh, an end-to-end pipeline check
 docs/         the algorithm walkthrough (markdown and illustrated HTML),
