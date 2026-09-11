@@ -15,6 +15,7 @@ add_library(mz
     src/mlp.cpp
     src/network.cpp
     src/replay_buffer.cpp
+    src/selfplay.cpp
     src/targets.cpp
 )
 target_include_directories(mz PUBLIC include)
@@ -40,3 +41,4 @@ mz_add_test(test_mcts)
 mz_add_test(test_network)
 mz_add_test(test_replay_buffer)
 mz_add_test(test_targets)
+mz_add_test(test_selfplay)
