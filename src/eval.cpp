@@ -15,11 +15,12 @@ int playOneGame(const MuZeroNetwork& network, bool networkPlaysX, int numSimulat
     config.addRootNoise = false;   // the network's unperturbed best play
 
     Board board;
+    // Reused across the whole game; see the note in selfplay.cpp.
+    MCTS mcts(network, config, rng);
     while (!board.isTerminal()) {
         bool networkTurn = (board.playerToMove() == Cell::X) == networkPlaysX;
         int move;
         if (networkTurn) {
-            MCTS mcts(network, config, rng);
             move = mcts.run(board, 0.0f).selectedMove;
         } else {
             move = minimaxBestMove(board);
