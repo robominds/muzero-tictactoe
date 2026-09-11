@@ -38,13 +38,16 @@ public:
     bool operator==(const Board& other) const;
 
 private:
-    // Recomputes outcome_ from cells_. Called only when the board changes.
-    void refreshOutcome();
+    // Updates outcome_ after `index` was just played by `mover`. Only the
+    // lines through that square can have newly completed, so this checks
+    // four of them rather than rescanning all eight.
+    void updateOutcomeAfter(int index, Cell mover);
 
     std::array<Cell, 9> cells_;
     Cell toMove_;
-    // Derived from cells_, so it takes no part in operator==.
+    // Both derived from cells_, so neither takes part in operator==.
     Outcome outcome_;
+    int8_t filled_;
 };
 
 } // namespace mz

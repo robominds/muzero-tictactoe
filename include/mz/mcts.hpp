@@ -135,6 +135,10 @@ private:
     const MuZeroNetwork& network_;
     MCTSConfig config_;
     std::mt19937& rng_;
+    // Scratch reused by every inference this search performs. One search
+    // runs hundreds of them, and a fresh set of buffers per call was the
+    // single largest source of allocator traffic in training.
+    mutable MuZeroNetwork::Workspace workspace_;
 };
 
 } // namespace mz

@@ -121,7 +121,7 @@ MCTSResult MCTS::run(const Board& board, float temperature) {
     const std::vector<int> legalActions = board.legalMoves();
 
     Node root;
-    MuZeroNetwork::InitialInference initial = network_.initialInference(board.encode());
+    MuZeroNetwork::InitialInference initial = network_.initialInference(board.encode(), workspace_);
     root.latent = initial.latent;
 
     // The one and only place legality enters the search.
@@ -153,7 +153,7 @@ MCTSResult MCTS::run(const Board& board, float temperature) {
 
         Node* parent = path[path.size() - 2];
         MuZeroNetwork::RecurrentInference step =
-            network_.recurrentInference(parent->latent, lastAction);
+            network_.recurrentInference(parent->latent, lastAction, workspace_);
 
         node->latent = std::move(step.latent);
         node->stats.reward = step.reward;

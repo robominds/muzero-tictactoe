@@ -63,6 +63,53 @@ void test_encode_is_from_perspective_of_player_to_move() {
     assert(enc[9 + 0] == 1.0f);
 }
 
+// A full rescan of all eight lines, independent of Board's incremental
+// bookkeeping. The reference the exhaustive test below compares against.
+Outcome rescanOutcome(const Board& b) {
+    static const int lines[8][3] = {
+        {0, 1, 2}, {3, 4, 5}, {6, 7, 8},
+        {0, 3, 6}, {1, 4, 7}, {2, 5, 8},
+        {0, 4, 8}, {2, 4, 6},
+    };
+    for (const auto& line : lines) {
+        Cell a = b.cellAt(line[0]);
+        if (a != Cell::Empty && a == b.cellAt(line[1]) && a == b.cellAt(line[2])) {
+            return a == Cell::X ? Outcome::XWins : Outcome::OWins;
+        }
+    }
+    for (int i = 0; i < 9; ++i) {
+        if (b.cellAt(i) == Cell::Empty) return Outcome::Ongoing;
+    }
+    return Outcome::Draw;
+}
+
+int positionsChecked = 0;
+
+// Walks every reachable position and checks the cached, incrementally
+// maintained outcome against a from-scratch rescan.
+//
+// Board updates outcome_ in applyMove by checking only the lines through
+// the square just played, using a hand-written table of which lines pass
+// through which square. A single wrong entry in that table is invisible
+// until some specific position is misjudged -- which is exactly what
+// happened while this optimization was being written, and what this test
+// now catches.
+void walk(const Board& b) {
+    ++positionsChecked;
+    assert(b.outcome() == rescanOutcome(b));
+    if (b.isTerminal()) return;
+    for (int m : b.legalMoves()) walk(b.applyMove(m));
+}
+
+void test_cached_outcome_matches_a_full_rescan_everywhere() {
+    Board b;
+    walk(b);
+    // 549946 nodes in the full tic-tac-toe game tree, counting repeats via
+    // distinct move orders. Pinned so a search that silently stops early
+    // cannot make this test vacuous.
+    assert(positionsChecked == 549946);
+}
+
 int main() {
     test_new_board_has_nine_legal_moves();
     test_apply_move_alternates_player();
@@ -71,6 +118,7 @@ int main() {
     test_draw_detected();
     test_illegal_move_rejected_by_isLegalMove();
     test_encode_is_from_perspective_of_player_to_move();
+    test_cached_outcome_matches_a_full_rescan_everywhere();
     std::printf("all board tests passed\n");
     return 0;
 }
