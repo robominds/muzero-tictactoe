@@ -191,7 +191,7 @@ MuZeroNetwork::InitialInference MuZeroNetwork::initialInference(
     return out;
 }
 ```
-*src/network.cpp:82 — `MuZeroNetwork::initialInference`*
+*src/network.cpp:52 — `MuZeroNetwork::initialInference` (the Workspace overload)*
 
 (There is also a one-argument overload, `initialInference(observation)`, a thin wrapper that builds a
 throwaway `Workspace` and forwards to this one — for callers, like the tests, that do not care about
@@ -222,7 +222,7 @@ MuZeroNetwork::RecurrentInference MuZeroNetwork::recurrentInference(const std::v
     return out;
 }
 ```
-*src/network.cpp:108 — `MuZeroNetwork::recurrentInference`*
+*src/network.cpp:78 — `MuZeroNetwork::recurrentInference` (the Workspace overload)*
 
 Notice that `f` — `fFc1_`, `reluInto`, `fPolicy_`, `fValue_` — runs
 identically in both, into the same `ws.predPre`/`ws.pred` scratch. One
@@ -253,18 +253,18 @@ the state, and the only thing a `Dense` layer accepts is a vector of
 floats. So the action becomes nine floats:
 
 ```cpp
-std::vector<float> MuZeroNetwork::makeDynamicsInput(const std::vector<float>& latent, int action) {
+void MuZeroNetwork::fillDynamicsInput(const std::vector<float>& latent, int action,
+                                      std::vector<float>& out) {
     assert(static_cast<int>(latent.size()) == kLatentSize);
     assert(action >= 0 && action < kActionSize);
-    // Latent with the action appended as a one-hot. This is how an action
-    // enters the model at all -- there is no board to apply it to.
-    std::vector<float> input(kLatentSize + kActionSize, 0.0f);
-    std::copy(latent.begin(), latent.end(), input.begin());
-    input[kLatentSize + action] = 1.0f;
-    return input;
+    // assign, not resize: the one-hot tail must be zeroed even when this
+    // buffer is being reused from a previous action.
+    out.assign(kLatentSize + kActionSize, 0.0f);
+    std::copy(latent.begin(), latent.end(), out.begin());
+    out[kLatentSize + action] = 1.0f;
 }
 ```
-*src/network.cpp:42 — `MuZeroNetwork::makeDynamicsInput`*
+*src/network.cpp:31 — `MuZeroNetwork::fillDynamicsInput`*
 
 **Example.** Latent `s = [s₀ … s₃₁]`, action 4 (the centre square):
 
@@ -279,7 +279,7 @@ means nothing on a 3×3 grid. Nine independent input columns let the network
 learn nine unrelated things.
 
 And note what is *absent*: no legality check, and no way to express "that
-move is impossible." `makeDynamicsInput` will cheerfully encode action 4 on
+move is impossible." `fillDynamicsInput` will cheerfully encode action 4 on
 a latent whose real board already has a stone on square 4. `g` will
 cheerfully produce a next latent for it. That is not an oversight — it is
 section 03.
@@ -901,7 +901,7 @@ observation
             ws.reward[k + 1] = std::tanh(ws.scalarGrad[0]);
         }
 ```
-*src/network.cpp:238 — `MuZeroNetwork::trainStep` (forward unroll)*
+*src/network.cpp:208 — `MuZeroNetwork::trainStep` (forward unroll)*
 
 Every intermediate is kept — `ws.latentPre` as well as `ws.latent`, the
 pre-activations as well as the activations — because the backward pass
@@ -947,7 +947,7 @@ The reverse pass is one loop from `k = K` down to `0`:
             fFc1_.backwardInto(ws.latent[k], ws.dPredictionPre, ws.dFromPrediction);
             for (int i = 0; i < kLatentSize; ++i) ws.dLatent[k][i] += ws.dFromPrediction[i];
 ```
-*src/network.cpp:280 — `MuZeroNetwork::trainStep` (reverse pass, prediction head)*
+*src/network.cpp:250 — `MuZeroNetwork::trainStep` (reverse pass, prediction head)*
 
 `dLatent[k]` accumulates from two sources: the prediction head at step `k`,
 and the dynamics step `k → k+1`. Going strictly downward guarantees the
@@ -962,7 +962,7 @@ this is one reverse loop rather than two passes.
         const float tailScale = (K > 0) ? 1.0f / static_cast<float>(K) : 1.0f;
         auto lossScale = [&](int k) { return k == 0 ? 1.0f : tailScale; };
 ```
-*src/network.cpp:211 — `MuZeroNetwork::trainStep`*
+*src/network.cpp:181 — `MuZeroNetwork::trainStep`*
 
 Step 0 counts fully; steps 1 through `K` each count `1/K`. Without it, a
 `K = 5` sample would contribute six times the gradient of a `K = 0` sample
@@ -982,7 +982,7 @@ depend on the unroll depth.
                     ws.dLatent[k - 1][i] += dynamicsGradientScale_ * ws.dDynamicsInput[i];
                 }
 ```
-*src/network.cpp:312 — `MuZeroNetwork::trainStep` (the half gradient)*
+*src/network.cpp:282 — `MuZeroNetwork::trainStep` (the half gradient)*
 
 Gradient flowing back through the recurrence is halved at every step. By
 the time signal from step 5 reaches step 0 it has been multiplied by

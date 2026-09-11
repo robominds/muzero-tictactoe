@@ -88,6 +88,13 @@ def main():
             continue
 
         hits = [n for n, l in enumerate(src, 1) if l.rstrip() == quoted.rstrip()]
+        if len(hits) > 1:
+            # Overloads share a first line. Disambiguate on the second
+            # quoted line, which differs between them.
+            following = next((l for l in excerpt[excerpt.index(quoted) + 1:] if l.strip()), None)
+            if following is not None:
+                hits = [n for n in hits
+                        if n < len(src) and src[n].rstrip() == following.rstrip()]
         if len(hits) == 1:
             shifted.append((index, path, cited, hits[0], sym))
         else:

@@ -113,18 +113,6 @@ public:
     void load(const std::string& path);
 
 private:
-    // Forward pieces shared by inference and training. Each returns the
-    // pre-activations training needs; inference discards them.
-    struct HiddenTrace {
-        std::vector<float> preActivation;   // before ReLU
-        std::vector<float> activation;      // after ReLU
-    };
-
-    HiddenTrace representationHidden(const std::array<float, kObservationSize>& observation) const;
-    HiddenTrace dynamicsHidden(const std::vector<float>& dynamicsInput) const;
-    HiddenTrace predictionHidden(const std::vector<float>& latent) const;
-
-    static std::vector<float> makeDynamicsInput(const std::vector<float>& latent, int action);
     static void fillDynamicsInput(const std::vector<float>& latent, int action,
                                   std::vector<float>& out);
 

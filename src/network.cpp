@@ -39,39 +39,9 @@ void MuZeroNetwork::fillDynamicsInput(const std::vector<float>& latent, int acti
     out[kLatentSize + action] = 1.0f;
 }
 
-std::vector<float> MuZeroNetwork::makeDynamicsInput(const std::vector<float>& latent, int action) {
-    assert(static_cast<int>(latent.size()) == kLatentSize);
-    assert(action >= 0 && action < kActionSize);
-    // Latent with the action appended as a one-hot. This is how an action
-    // enters the model at all -- there is no board to apply it to.
-    std::vector<float> input(kLatentSize + kActionSize, 0.0f);
-    std::copy(latent.begin(), latent.end(), input.begin());
-    input[kLatentSize + action] = 1.0f;
-    return input;
-}
 
-MuZeroNetwork::HiddenTrace MuZeroNetwork::representationHidden(
-    const std::array<float, kObservationSize>& observation) const {
-    std::vector<float> input(observation.begin(), observation.end());
-    HiddenTrace trace;
-    trace.preActivation = hFc1_.forward(input);
-    trace.activation = relu(trace.preActivation);
-    return trace;
-}
 
-MuZeroNetwork::HiddenTrace MuZeroNetwork::dynamicsHidden(const std::vector<float>& dynamicsInput) const {
-    HiddenTrace trace;
-    trace.preActivation = gFc1_.forward(dynamicsInput);
-    trace.activation = relu(trace.preActivation);
-    return trace;
-}
 
-MuZeroNetwork::HiddenTrace MuZeroNetwork::predictionHidden(const std::vector<float>& latent) const {
-    HiddenTrace trace;
-    trace.preActivation = fFc1_.forward(latent);
-    trace.activation = relu(trace.preActivation);
-    return trace;
-}
 
 MuZeroNetwork::InitialInference MuZeroNetwork::initialInference(
     const std::array<float, kObservationSize>& observation) const {

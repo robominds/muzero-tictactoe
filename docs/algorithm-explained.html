@@ -570,7 +570,7 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
     return out;
 }</code></pre>
 
-<p><em>src/network.cpp:82 — <code>MuZeroNetwork::initialInference</code></em></p>
+<p><em>src/network.cpp:52 — <code>MuZeroNetwork::initialInference</code> (the Workspace overload)</em></p>
 
 <p>(There is also a one-argument overload, <code>initialInference(observation)</code>, a thin wrapper that builds a throwaway <code>Workspace</code> and forwards to this one — for callers, like the tests, that do not care about reuse. The workspace is discussed below.)</p>
 
@@ -597,7 +597,7 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
     return out;
 }</code></pre>
 
-<p><em>src/network.cpp:108 — <code>MuZeroNetwork::recurrentInference</code></em></p>
+<p><em>src/network.cpp:78 — <code>MuZeroNetwork::recurrentInference</code> (the Workspace overload)</em></p>
 
 <p>Notice that <code>f</code> — <code>fFc1_</code>, <code>reluInto</code>, <code>fPolicy_</code>, <code>fValue_</code> — runs identically in both, into the same <code>ws.predPre</code>/<code>ws.pred</code> scratch. One prediction network, shared between "a real position I just looked at" and "a position I imagined four plies deep." That sharing is what forces the latents produced by <code>g</code> to live in the same space as the latents produced by <code>h</code>: they both have to be readable by the same <code>f</code>.</p>
 
@@ -613,18 +613,18 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
 
 <p>In AlphaZero, "apply action 4" is <code>board.applyMove(4)</code> — the integer indexes a cell, the cell gets a stone, done. In MuZero there is no board and no cell. The action has to reach the dynamics network as <em>input</em>, alongside the state, and the only thing a <code>Dense</code> layer accepts is a vector of floats. So the action becomes nine floats:</p>
 
-<pre><code class="language-cpp">std::vector&lt;float&gt; MuZeroNetwork::makeDynamicsInput(const std::vector&lt;float&gt;&amp; latent, int action) {
+<pre><code class="language-cpp">void MuZeroNetwork::fillDynamicsInput(const std::vector&lt;float&gt;&amp; latent, int action,
+                                      std::vector&lt;float&gt;&amp; out) {
     assert(static_cast&lt;int&gt;(latent.size()) == kLatentSize);
     assert(action &gt;= 0 &amp;&amp; action &lt; kActionSize);
-    // Latent with the action appended as a one-hot. This is how an action
-    // enters the model at all -- there is no board to apply it to.
-    std::vector&lt;float&gt; input(kLatentSize + kActionSize, 0.0f);
-    std::copy(latent.begin(), latent.end(), input.begin());
-    input[kLatentSize + action] = 1.0f;
-    return input;
+    // assign, not resize: the one-hot tail must be zeroed even when this
+    // buffer is being reused from a previous action.
+    out.assign(kLatentSize + kActionSize, 0.0f);
+    std::copy(latent.begin(), latent.end(), out.begin());
+    out[kLatentSize + action] = 1.0f;
 }</code></pre>
 
-<p><em>src/network.cpp:42 — <code>MuZeroNetwork::makeDynamicsInput</code></em></p>
+<p><em>src/network.cpp:31 — <code>MuZeroNetwork::fillDynamicsInput</code></em></p>
 
 <p><strong>Example.</strong> Latent <code>s = [s₀ … s₃₁]</code>, action 4 (the centre square):</p>
 
@@ -665,7 +665,7 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
 
 <p>That is the entire mechanism. One-hot rather than the raw integer 4, because a <code>Dense</code> layer is linear in its input and would otherwise be told that action 8 is "twice as much action" as action 4 — an ordering that means nothing on a 3×3 grid. Nine independent input columns let the network learn nine unrelated things.</p>
 
-<p>And note what is <em>absent</em>: no legality check, and no way to express "that move is impossible." <code>makeDynamicsInput</code> will cheerfully encode action 4 on a latent whose real board already has a stone on square 4. <code>g</code> will cheerfully produce a next latent for it. That is not an oversight — it is section 03.</p>
+<p>And note what is <em>absent</em>: no legality check, and no way to express "that move is impossible." <code>fillDynamicsInput</code> will cheerfully encode action 4 on a latent whose real board already has a stone on square 4. <code>g</code> will cheerfully produce a next latent for it. That is not an oversight — it is section 03.</p>
 
 <h3 id="keeping-the-recurrence-from-drifting">Keeping the recurrence from drifting</h3>
 
@@ -1290,7 +1290,7 @@ MuZero:     score(a) = normalize(Q(s,a))
             ws.reward[k + 1] = std::tanh(ws.scalarGrad[0]);
         }</code></pre>
 
-<p><em>src/network.cpp:238 — <code>MuZeroNetwork::trainStep</code> (forward unroll)</em></p>
+<p><em>src/network.cpp:208 — <code>MuZeroNetwork::trainStep</code> (forward unroll)</em></p>
 
 <p>Every intermediate is kept — <code>ws.latentPre</code> as well as <code>ws.latent</code>, the pre-activations as well as the activations — because the backward pass needs each of them again. <code>ws</code> here is a <code>TrainScratch</code>, <code>trainStep</code>'s own reusable buffer (below); unrolling one sample used to allocate on the order of sixty vectors, and settling their sizes once, on the first sample, is what removed that traffic. This is <strong>backpropagation through time</strong>: the same three networks appear many times in one computation graph, and their gradients are the <em>sum</em> over every appearance.</p>
 
@@ -1325,7 +1325,7 @@ MuZero:     score(a) = normalize(Q(s,a))
             fFc1_.backwardInto(ws.latent[k], ws.dPredictionPre, ws.dFromPrediction);
             for (int i = 0; i &lt; kLatentSize; ++i) ws.dLatent[k][i] += ws.dFromPrediction[i];</code></pre>
 
-<p><em>src/network.cpp:280 — <code>MuZeroNetwork::trainStep</code> (reverse pass, prediction head)</em></p>
+<p><em>src/network.cpp:250 — <code>MuZeroNetwork::trainStep</code> (reverse pass, prediction head)</em></p>
 
 <p><code>dLatent[k]</code> accumulates from two sources: the prediction head at step <code>k</code>, and the dynamics step <code>k → k+1</code>. Going strictly downward guarantees the second has already arrived before <code>dLatent[k]</code> is consumed — which is why this is one reverse loop rather than two passes.</p>
 
@@ -1336,7 +1336,7 @@ MuZero:     score(a) = normalize(Q(s,a))
         const float tailScale = (K &gt; 0) ? 1.0f / static_cast&lt;float&gt;(K) : 1.0f;
         auto lossScale = [&amp;](int k) { return k == 0 ? 1.0f : tailScale; };</code></pre>
 
-<p><em>src/network.cpp:211 — <code>MuZeroNetwork::trainStep</code></em></p>
+<p><em>src/network.cpp:181 — <code>MuZeroNetwork::trainStep</code></em></p>
 
 <p>Step 0 counts fully; steps 1 through <code>K</code> each count <code>1/K</code>. Without it, a <code>K = 5</code> sample would contribute six times the gradient of a <code>K = 0</code> sample purely because it is longer, and the batch's effective learning rate would depend on the unroll depth.</p>
 
@@ -1352,7 +1352,7 @@ MuZero:     score(a) = normalize(Q(s,a))
                     ws.dLatent[k - 1][i] += dynamicsGradientScale_ * ws.dDynamicsInput[i];
                 }</code></pre>
 
-<p><em>src/network.cpp:312 — <code>MuZeroNetwork::trainStep</code> (the half gradient)</em></p>
+<p><em>src/network.cpp:282 — <code>MuZeroNetwork::trainStep</code> (the half gradient)</em></p>
 
 <p>Gradient flowing back through the recurrence is halved at every step. By the time signal from step 5 reaches step 0 it has been multiplied by <code>0.5⁵ = 1/32</code>. This is the recurrent-network analogue of the forward-side <code>minMaxNormalize</code> from section 02: one keeps activations from compounding forward, the other keeps gradients from compounding backward.</p>
 
