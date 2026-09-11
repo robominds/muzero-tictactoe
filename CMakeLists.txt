@@ -53,3 +53,17 @@ target_link_libraries(evaluate mz)
 
 add_executable(play_cli apps/play_cli.cpp)
 target_link_libraries(play_cli mz)
+
+# Plays one game as X and one as O against minimax, printing every move
+# and MCTS visit distribution. Useful for tracing exactly where and why a
+# checkpoint loses, e.g. `./diag_eval checkpoint.bin`.
+add_executable(diag_eval tools/diag_eval.cpp)
+target_link_libraries(diag_eval mz)
+
+# Measures whether the learned dynamics tracks the real game. No AlphaZero
+# equivalent exists: AlphaZero has no learned model that could be wrong.
+add_executable(latent_probe tools/latent_probe.cpp)
+target_link_libraries(latent_probe mz)
+
+add_test(NAME integration_smoke
+         COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration_smoke.sh ${CMAKE_CURRENT_BINARY_DIR})
