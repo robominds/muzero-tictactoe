@@ -107,7 +107,7 @@ for (int a = 0; a < 9; ++a) {
 }
 ```
 
-`mz/tests/test_mcts.cpp:156-179`,
+`mz/tests/test_mcts.cpp:156-182`,
 `test_tree_grows_below_a_root_with_only_one_legal_move`, makes the
 consequence concrete: it fills the board to a single legal move at the
 root, then asserts the search still reaches `maxDepth >= 2` — i.e., the
@@ -119,7 +119,7 @@ reports search reaching depth 18–19 during `diag_eval` at 400 simulations,
 on a board that cannot legally be more than 9 plies deep — "the median
 simulation is illegal by the time it terminates." And the headline
 convergence comparison in `docs/results.md` is exactly this cost made
-visible: AlphaZero reached `draws=40 losses=0` reliably in 20 iterations
+visible: AlphaZero reached `draws=40 losses=0` in 20 iterations
 (`az/README.md`); this project's best configuration converged on 1 of 3
 seeds after 800 iterations, and 0 of 3 seeds at every other configuration
 tried up to 1500 iterations. See "The headline result" below for the full,
@@ -299,7 +299,7 @@ The training consequence is direct. AlphaZero's `trainStep`
 example. MuZero's `trainStep` (`mz/src/network.cpp:160` onward) runs `h` once,
 then `g` and `f` repeatedly across a K-step unroll in a single forward
 pass, and backpropagates through all of it in one reverse loop
-(`mz/src/network.cpp:228` onward) — backprop-through-time, because
+(`mz/src/network.cpp:229` onward) — backprop-through-time, because
 `g` is applied to its own previous output K times inside one loss. That
 recurrence is exactly why `mz::Dense::backward` had to *accumulate* into
 its gradient buffers rather than overwrite them
@@ -383,11 +383,15 @@ runs, exactly one converged: `numSimulations=100`, `temperatureMoves=6`,
 at that identical configuration gave `draws=50 losses=50` and
 `draws=0 losses=100`. No configuration tried converged on all three seeds
 of any cell tested. The sibling AlphaZero project reached
-`draws=40 losses=0` in 20 iterations, and does so reliably (`az/README.md`).
+`draws=40 losses=0` in 20 iterations (`az/README.md`).
 
 That gap is real, but an "iteration" is not the same unit of work in the
 two projects, and the comparison should not be read as more precise than
-it is. Reading both projects' `apps/train.cpp` directly (as
+it is. Nor is it measured to the same standard: `az/README.md` reports a
+single run, with no seed control and no grid, where this document's MuZero
+numbers come from a matched 3-seed-per-cell sweep. The AlphaZero side of
+this comparison is one data point, not an average or a best-of. Reading
+both projects' `apps/train.cpp` directly (as
 `docs/results.md`'s "Comparison with the AlphaZero sibling project"
 section does):
 
@@ -401,8 +405,9 @@ section does):
 MuZero does roughly 4x the gradient-step throughput of AlphaZero per
 iteration, and 800 MuZero iterations amount to something like 80x
 AlphaZero's total gradient-step-samples — yet converged on only 1 of 3
-seeds, where AlphaZero converged reliably in 20 iterations of its smaller
-budget. The imprecision is real: the two self-play loops, network
+seeds, where AlphaZero converged in 20 iterations of its smaller budget
+(on the single run reported in `az/README.md` — see the caveat above).
+The imprecision is real: the two self-play loops, network
 architectures (MuZero has a representation network and a reward head with
 no AlphaZero equivalent), and target constructions (K-step unrolling)
 differ enough that iteration count is not a unit-comparable currency

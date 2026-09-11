@@ -415,7 +415,7 @@ svg .loss-box{ fill:var(--surface-2); stroke:var(--rule-strong); stroke-width:1.
 
 <p>What happens when you take the rules away — a 9-square board, three small networks, and a tree search that plans inside a model it invented for itself, walked through against the actual C++ in this repository, section by section, in the order the code actually runs.</p>
 
-<p><em>(A richer, illustrated version of this document — with diagrams and syntax highlighting — is available as a published page; see the project README.)</em></p>
+<p><em>(A richer, illustrated version of this document — with diagrams and syntax highlighting — is available as <code>docs/algorithm-explained.html</code>.)</em></p>
 
 <p><strong>Language:</strong> C++17, zero dependencies · <strong>Networks:</strong> <code>h</code> 18 → 64 → 32 · <code>g</code> 41 → 64 → {32, 1} · <code>f</code> 32 → 64 → {9, 1} · <strong>Result:</strong> 1 of 3 seeds reached <code>draws=100 / losses=0</code> against perfect play; the other two at the identical configuration reached <code>draws=50 / losses=50</code> and <code>draws=0 / losses=100</code></p>
 
@@ -1596,7 +1596,7 @@ eval vs minimax: wins=0 draws=40 losses=0</code></pre>
 <p>Do not read this as <em>MuZero just needs more iterations here</em>. It is not a tuning footnote. Two seeds at the same configuration and the same 800 iterations did not converge; <code>temperatureMoves=2</code> at 1500 iterations did not converge on any of three seeds, and seed 303 at that setting scored <code>losses=100</code> at both 400 <strong>and</strong> 1500 iterations, unchanged despite 3.75× the training. The training loss was still falling at the end of every run and the categorical score did not track it. What is missing is not iterations. It is reliability.</p>
 
 <blockquote>
-<p><strong>vs AlphaZero.</strong> Each MuZero iteration here does four times the gradient-step throughput of an AlphaZero iteration (40×64 samples versus 20×32), so 800 iterations is worth roughly 80× AlphaZero's total training samples — and it converged on one seed in three, where AlphaZero's much smaller budget converged reliably in 20 iterations. Iteration counts are not a unit-comparable currency between the two projects (different architectures, different self-play loops, different target construction), so treat that as context rather than a multiplier. The comparison that <em>is</em> precise is in the next section.</p>
+<p><strong>vs AlphaZero.</strong> Each MuZero iteration here does four times the gradient-step throughput of an AlphaZero iteration (40×64 samples versus 20×32), so 800 iterations is worth roughly 80× AlphaZero's total training samples — and it converged on one seed in three, where AlphaZero's much smaller budget converged in 20 iterations. Iteration counts are not a unit-comparable currency between the two projects (different architectures, different self-play loops, different target construction); nor is "converged" measured the same way — AlphaZero's number is a single reported run, not a seed grid — so treat both as context rather than a multiplier. The comparison that <em>is</em> precise is in the next section.</p>
 </blockquote>
 
 <hr>

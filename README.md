@@ -72,7 +72,7 @@ one-in-three odds of reproducing that result.
 ### What "trained" looks like
 
 **The spec's first success criterion — converging to drawing play against
-minimax — was not reliably met.** Across 23 training runs at various
+minimax — was not met.** Across 23 training runs at various
 configurations, the best configuration found
 (`numSimulations=100`, `temperatureMoves=6`, 800 iterations) converged on
 **one of three seeds tested**, reaching `wins=0 draws=100 losses=0`
@@ -80,7 +80,9 @@ against perfect minimax play. The other two seeds at that identical
 configuration ended at `draws=50 losses=50` and `draws=0 losses=100`
 respectively, and no configuration tried converged on all three seeds of
 any cell. For comparison, the sibling AlphaZero project reaches
-`draws=40 losses=0` reliably, after just 20 iterations.
+`draws=40 losses=0` after just 20 iterations — though that is a single
+reported run, not a seed grid, so the two results are not measured to the
+same standard (see `docs/muzero-vs-alphazero.md`).
 
 That one converged run is not nothing: it is direct, genuine evidence that
 this implementation reaches optimal play end to end — search, the learned
@@ -96,6 +98,10 @@ the `diag_eval` transcripts of the exact losing line, and
 [`docs/muzero-vs-alphazero.md`](docs/muzero-vs-alphazero.md) for why this
 gap is expected in kind (MuZero is doing structurally harder work) even
 though its size here was not.
+
+**The spec's second success criterion — `latent_probe` showing rolled-forward
+dynamics staying close to a fresh representation pass — was also not met**;
+see the `latent_probe` measurements in `docs/results.md`.
 
 ## Diagnostics
 
@@ -149,7 +155,7 @@ src/          implementations (board, minimax, network, mcts, targets,
               replay buffer, self-play, minimax-eval helper)
 apps/         the three executables (train, evaluate, play_cli)
 tools/        diag_eval and latent_probe (diagnostics), render_doc.py (the
-              build-time markdown-to-HTML converter for docs/)
+              hand-run, offline markdown-to-HTML converter for docs/)
 tests/        assert-based test executables (one per component) plus
               tests/integration_smoke.sh, an end-to-end pipeline check
 docs/         the algorithm walkthrough (markdown and illustrated HTML),

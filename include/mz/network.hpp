@@ -62,7 +62,7 @@ public:
     // Precondition: latent.size() == kLatentSize, 0 <= action < 9 (asserted).
     RecurrentInference recurrentInference(const std::vector<float>& latent, int action) const;
 
-    // One SGD step over a batch of unrolled samples. Implemented in Task 6.
+    // One SGD step over a batch of unrolled samples.
     Losses trainStep(const std::vector<UnrolledSample>& batch, float learningRate);
 
     // The eight layers, addressable for gradient checking. A hand-written

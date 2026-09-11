@@ -141,8 +141,9 @@ void test_absorbing_padding_past_end_of_game() {
 
 void test_padding_actions_cycle_deterministically() {
     // The paper samples random actions past terminal. This uses a fixed
-    // cycle instead: deterministic, reproducible, and it still spreads
-    // across all nine actions as the sampled position varies.
+    // cycle instead: deterministic and reproducible. With unrollSteps=4
+    // here, k ranges over [0, 4), so this only ever emits actions 0..3 --
+    // it does not spread across all nine actions.
     GameHistory game = makeWinForFirstPlayer();
     TargetConfig config;
     config.unrollSteps = 4;

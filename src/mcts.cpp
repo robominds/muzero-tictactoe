@@ -212,7 +212,7 @@ MCTSResult MCTS::run(const Board& board, float temperature) {
         float running = 0.0f;
         for (int a : legalActions) {
             running += weights[a];
-            if (draw <= running) {
+            if (draw < running) {
                 chosen = a;
                 break;
             }

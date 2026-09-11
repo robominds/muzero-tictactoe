@@ -12,6 +12,14 @@ seeds at that exact configuration ended at `draws=50 losses=50` and
 seed out of three has not converged, and no configuration tried converged
 on all three seeds of any cell.
 
+**The spec's second success criterion — that `latent_probe` show rolling
+dynamics staying close to a fresh representation pass — was also not
+met.** The measurements are below, in "`latent_probe`: even the converged
+checkpoint's model still drifts": policy distance rises from 0.24 at k=1
+to 0.55 at k=6, value error sits around 0.31–0.34, and terminal-reward
+error is 0.77 on rewards in `{-1,0,+1}`. Neither of the spec's two success
+criteria was met.
+
 The one success is real and is reported below in full, because it is the
 only direct evidence in this project of what convergence looks like and
 because it pins down exactly what a converged checkpoint's search and
@@ -321,6 +329,12 @@ iterations**. MuZero here converged on 1 of 3 seeds after 800 iterations
 at its best-found configuration, and 0 of 3 seeds at every other
 configuration tried, up to 1500 iterations.
 
+That AlphaZero number is a single reported run, with no seed control and
+no grid — the sibling project has no multi-seed evidence at all, unlike
+the matched 3-seed-per-cell sweep this document runs for MuZero. The two
+results below are not measured to the same standard, and the comparison
+should be read with that asymmetry in mind.
+
 What differs between one "iteration" in each project (read directly from
 each project's `apps/train.cpp`):
 
@@ -337,11 +351,11 @@ each project's `apps/train.cpp`):
 Each MuZero iteration does 4x the gradient-step throughput of an
 AlphaZero iteration, and even so, 800 iterations (worth roughly 80x
 AlphaZero's total gradient-step-samples) converged on only one of three
-seeds, where AlphaZero's much smaller compute budget converged reliably
-in 20. The per-iteration figures above are context, not a precise
-multiplier — the two self-play loops, network architectures (a
-representation network and a reward head that AlphaZero has no
-equivalent of), and target constructions (K-step unrolling) differ
+seeds, where AlphaZero's much smaller compute budget converged in 20, on
+the single run reported in its README. The per-iteration figures above
+are context, not a precise multiplier — the two self-play loops, network
+architectures (a representation network and a reward head that AlphaZero
+has no equivalent of), and target constructions (K-step unrolling) differ
 enough that iteration count is not a unit-comparable currency between
 the projects. The comparison that *is* precise: AlphaZero's search never
 leaves the real board, so its greedy self-play tail reliably rediscovers

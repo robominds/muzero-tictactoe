@@ -6,7 +6,8 @@
 namespace mz {
 
 struct SelfPlayConfig {
-    // Task 11 tuning (see docs/results.md): raised from 60 to 100. Tried
+    // Tuned against measured convergence (see docs/results.md): raised
+    // from 60 to 100. Tried
     // 160 and 300 too; both did as well as or worse than 100 across
     // matched seeds -- more search budget is not simply better once most
     // of it is already being spent below the point where any legal game
@@ -17,7 +18,8 @@ struct SelfPlayConfig {
     // Plies from the start that use temperature=1.0 sampling, for training
     // data diversity. Greedy afterward.
     //
-    // Task 11 tuning (see docs/results.md): raised from 2. AlphaZero's
+    // Tuned against measured convergence (see docs/results.md): raised
+    // from 2. AlphaZero's
     // search steps the real rules below the root, so its greedy tail
     // (plies >= this) reliably rediscovers a corrective line if the
     // network is ever wrong about it. MuZero's greedy tail searches over

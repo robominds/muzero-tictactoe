@@ -16,7 +16,7 @@ int main(int argc, char** argv) {
     unsigned int seed = argc >= 4 ? static_cast<unsigned int>(std::strtoul(argv[3], nullptr, 10))
                                   : std::random_device{}();
 
-    // Starting point. Task 11 tunes these against measured convergence.
+    // Starting point, tuned against measured convergence (see docs/results.md).
     const int gamesPerIteration = 25;
     const int batchSize = 64;
     const int trainStepsPerIteration = 40;

@@ -83,7 +83,9 @@ UnrolledSample makeUnrolledSample(const GameHistory& game, int position, const T
                 // Absorbing state. The paper samples a uniformly random
                 // action here; a fixed cycle is used instead so the
                 // function stays pure and the targets stay reproducible.
-                // Across sampled positions this still covers all nine.
+                // With the default unroll length K, k ranges over
+                // [0, K), so this only ever emits actions 0..K-1 --
+                // dynamics never sees actions K..8 in absorbing states.
                 sample.actions[k] = k % 9;
             }
         }

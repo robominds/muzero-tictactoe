@@ -6,7 +6,7 @@ itself, walked through against the actual C++ in this repository, section
 by section, in the order the code actually runs.
 
 *(A richer, illustrated version of this document — with diagrams and syntax
-highlighting — is available as a published page; see the project README.)*
+highlighting — is available as `docs/algorithm-explained.html`.)*
 
 **Language:** C++17, zero dependencies · **Networks:** `h` 18 → 64 → 32 ·
 `g` 41 → 64 → {32, 1} · `f` 32 → 64 → {9, 1} ·
@@ -1182,11 +1182,12 @@ iterations. It is reliability.
 > gradient-step throughput of an AlphaZero iteration (40×64 samples versus
 > 20×32), so 800 iterations is worth roughly 80× AlphaZero's total training
 > samples — and it converged on one seed in three, where AlphaZero's much
-> smaller budget converged reliably in 20 iterations. Iteration counts are
-> not a unit-comparable currency between the two projects (different
-> architectures, different self-play loops, different target construction),
-> so treat that as context rather than a multiplier. The comparison that
-> *is* precise is in the next section.
+> smaller budget converged in 20 iterations. Iteration counts are not a
+> unit-comparable currency between the two projects (different
+> architectures, different self-play loops, different target construction);
+> nor is "converged" measured the same way — AlphaZero's number is a single
+> reported run, not a seed grid — so treat both as context rather than a
+> multiplier. The comparison that *is* precise is in the next section.
 
 ---
 
