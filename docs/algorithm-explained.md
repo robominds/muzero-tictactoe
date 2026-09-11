@@ -249,7 +249,7 @@ std::vector<float> MuZeroNetwork::makeDynamicsInput(const std::vector<float>& la
     return input;
 }
 ```
-*src/network.cpp:31 — `MuZeroNetwork::makeDynamicsInput`*
+*src/network.cpp:42 — `MuZeroNetwork::makeDynamicsInput`*
 
 **Example.** Latent `s = [s₀ … s₃₁]`, action 4 (the centre square):
 
@@ -287,7 +287,7 @@ std::vector<float> minMaxNormalize(const std::vector<float>& z) {
     return out;
 }
 ```
-*src/mlp.cpp:127 — `minMaxNormalize`*
+*src/mlp.cpp:163 — `minMaxNormalize`*
 
 Both `h` (line 68 of `src/network.cpp`) and `g` (line 83) push their output
 through it, so *every* latent in the system, no matter how it was produced
@@ -359,7 +359,7 @@ MCTSResult MCTS::run(const Board& board, float temperature) {
     }
     root.expanded = true;
 ```
-*src/mcts.cpp:119 — `MCTS::run` (root setup)*
+*src/mcts.cpp:136 — `MCTS::run` (root setup)*
 
 Two real-world facts are consumed here and nowhere else: the encoded
 observation, and `legalMoves()`. The root gets children only for legal
@@ -660,7 +660,7 @@ nothing until it is over:
             game.rewards.back() = reward;
         }
 ```
-*src/selfplay.cpp:36 — `playSelfPlayGame`*
+*src/selfplay.cpp:40 — `playSelfPlayGame`*
 
 Every entry of `game.rewards` was pushed as `0.0f` a few lines earlier
 (`src/selfplay.cpp:30`); only the last one is ever overwritten, and only
@@ -864,7 +864,7 @@ observation
             reward[k + 1] = std::tanh(gReward_.forward(dynamicsTrace[k].activation)[0]);
         }
 ```
-*src/network.cpp:194 — `MuZeroNetwork::trainStep` (forward unroll)*
+*src/network.cpp:238 — `MuZeroNetwork::trainStep` (forward unroll)*
 
 Every intermediate is kept — `latentPre` as well as `latent`, the
 pre-activations as well as the activations — because the backward pass
@@ -925,7 +925,7 @@ this is one reverse loop rather than two passes.
         const float tailScale = (K > 0) ? 1.0f / static_cast<float>(K) : 1.0f;
         auto lossScale = [&](int k) { return k == 0 ? 1.0f : tailScale; };
 ```
-*src/network.cpp:176 — `MuZeroNetwork::trainStep`*
+*src/network.cpp:211 — `MuZeroNetwork::trainStep`*
 
 Step 0 counts fully; steps 1 through `K` each count `1/K`. Without it, a
 `K = 5` sample would contribute six times the gradient of a `K = 0` sample
