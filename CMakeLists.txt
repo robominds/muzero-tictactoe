@@ -10,6 +10,7 @@ endif()
 
 add_library(mz
     src/board.cpp
+    src/eval.cpp
     src/mcts.cpp
     src/minimax.cpp
     src/mlp.cpp
@@ -42,3 +43,13 @@ mz_add_test(test_network)
 mz_add_test(test_replay_buffer)
 mz_add_test(test_targets)
 mz_add_test(test_selfplay)
+mz_add_test(test_eval)
+
+add_executable(train apps/train.cpp)
+target_link_libraries(train mz)
+
+add_executable(evaluate apps/evaluate.cpp)
+target_link_libraries(evaluate mz)
+
+add_executable(play_cli apps/play_cli.cpp)
+target_link_libraries(play_cli mz)
