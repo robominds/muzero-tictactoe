@@ -1328,7 +1328,7 @@ for whichever fundamental you want to see again in situ.
 | Exploration vs. exploitation (search-time) | `explorationTerm` + `MinMaxStats` — `src/mcts.cpp:32`, `src/mcts.cpp:19` | Fixed `c_puct` PUCT — `src/mcts.cpp:50` |
 | Value normalization in search | `MinMaxStats` — `src/mcts.cpp:9` | — (Q is already in `[-1, 1]`) |
 | Guaranteed exploration / Dirichlet root noise | `MCTS::mixDirichletNoise`, self-play only — `src/mcts.cpp:78`, `src/selfplay.cpp:11` | `MCTS::mixDirichletNoise` — `src/mcts.cpp:13` |
-| Exploration vs. exploitation (trajectory-time) | `SelfPlayConfig::temperatureMoves` — `include/mz/selfplay.hpp:31` | `SelfPlayConfig::temperatureMoves` |
+| Exploration vs. exploitation (trajectory-time) | `SelfPlayConfig::temperatureMoves` — `include/mz/selfplay.hpp:33` | `SelfPlayConfig::temperatureMoves` |
 | Credit assignment with intermediate rewards | `backupPath` — `src/mcts.cpp:37` | Sign-flip only, no reward — `src/mcts.cpp:86` |
 | Reward as distinct from value | The dynamics reward head — `src/network.cpp:84`, `src/selfplay.cpp:36` | — (`Board::outcome()`) |
 | Monte Carlo return | `tdSteps = 32` collapsing the target to the outcome — `include/mz/targets.hpp:16` | The `z` label — `src/selfplay.cpp:31` |
